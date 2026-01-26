@@ -110,18 +110,30 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}) {
               options: { maxTurns: 1, model }
             })
 
-            for await (const message of response) {
-              if (message.type === "assistant") {
-                for (const block of message.message.content) {
-                  if (block.type === "text") {
-                    controller.enqueue(encoder.encode(`event: content_block_delta\ndata: ${JSON.stringify({
-                      type: "content_block_delta",
-                      index: 0,
-                      delta: { type: "text_delta", text: block.text }
-                    })}\n\n`))
+            const heartbeat = setInterval(() => {
+              try {
+                controller.enqueue(encoder.encode(`: ping\n\n`))
+              } catch {
+                clearInterval(heartbeat)
+              }
+            }, 15_000)
+
+            try {
+              for await (const message of response) {
+                if (message.type === "assistant") {
+                  for (const block of message.message.content) {
+                    if (block.type === "text") {
+                      controller.enqueue(encoder.encode(`event: content_block_delta\ndata: ${JSON.stringify({
+                        type: "content_block_delta",
+                        index: 0,
+                        delta: { type: "text_delta", text: block.text }
+                      })}\n\n`))
+                    }
                   }
                 }
               }
+            } finally {
+              clearInterval(heartbeat)
             }
 
             controller.enqueue(encoder.encode(`event: content_block_stop\ndata: ${JSON.stringify({

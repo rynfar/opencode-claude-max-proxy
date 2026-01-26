@@ -1,4 +1,5 @@
-const shouldLog = () => process.env["OPENCODE_CLAUDE_PROVIDER_DEBUG"]
+const shouldLog = () =>
+  process.env["OPENCODE_CLAUDE_PROVIDER_DEBUG"] || process.env["CLAUDE_PROXY_DEBUG"]
 
 export const claudeLog = (message: string, extra?: Record<string, unknown>) => {
   if (!shouldLog()) return

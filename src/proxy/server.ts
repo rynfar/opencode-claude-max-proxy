@@ -94,6 +94,11 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}) {
           }
         }
 
+        // If no text content was produced (e.g. only tool_use), return a fallback
+        if (!fullContent) {
+          fullContent = "I can help with that. Could you provide more details about what you'd like me to do?"
+        }
+
         return c.json({
           id: `msg_${Date.now()}`,
           type: "message",
@@ -127,23 +132,47 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}) {
               }
             }, 15_000)
 
+            const skipBlockIndices = new Set<number>()
+
             try {
               for await (const message of response) {
                 if (message.type === "stream_event") {
-                  // Forward the raw Anthropic SSE event directly
                   const event = message.event
                   const eventType = event.type
+                  const eventIndex = (event as any).index as number | undefined
+
+                  // Filter out tool_use content blocks — OpenCode expects text only
+                  if (eventType === "content_block_start") {
+                    const block = (event as any).content_block
+                    if (block?.type === "tool_use") {
+                      if (eventIndex !== undefined) skipBlockIndices.add(eventIndex)
+                      continue
+                    }
+                  }
+
+                  // Skip deltas and stops for tool_use blocks
+                  if (eventIndex !== undefined && skipBlockIndices.has(eventIndex)) {
+                    continue
+                  }
+
+                  // Override message_delta to always show end_turn
+                  if (eventType === "message_delta") {
+                    const patched = {
+                      ...event,
+                      delta: { ...((event as any).delta || {}), stop_reason: "end_turn" },
+                      usage: (event as any).usage || { output_tokens: 0 }
+                    }
+                    controller.enqueue(encoder.encode(`event: ${eventType}\ndata: ${JSON.stringify(patched)}\n\n`))
+                    continue
+                  }
+
+                  // Forward all other events (message_start, text deltas, content_block_start/stop for text, message_stop)
                   controller.enqueue(encoder.encode(`event: ${eventType}\ndata: ${JSON.stringify(event)}\n\n`))
                 }
               }
             } finally {
               clearInterval(heartbeat)
             }
-
-            // Ensure stream ends cleanly
-            controller.enqueue(encoder.encode(`event: message_stop\ndata: ${JSON.stringify({
-              type: "message_stop"
-            })}\n\n`))
 
             controller.close()
           } catch (error) {

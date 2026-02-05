@@ -1,6 +1,7 @@
 import { Hono } from "hono"
 import { cors } from "hono/cors"
 import { query } from "@anthropic-ai/claude-agent-sdk"
+import PQueue from "p-queue"
 import type { Context } from "hono"
 import type { ProxyConfig } from "./types"
 import { DEFAULT_PROXY_CONFIG } from "./types"
@@ -27,6 +28,9 @@ const ALLOWED_MCP_TOOLS = [
   `mcp__${MCP_SERVER_NAME}__glob`,
   `mcp__${MCP_SERVER_NAME}__grep`
 ]
+
+// Queue to serialize Claude Agent SDK queries and avoid ~60s delay on concurrent requests
+const requestQueue = new PQueue({ concurrency: 1 })
 
 function resolveClaudeExecutable(): string {
   // 1. Try the SDK's bundled cli.js (same dir as this module's SDK)
@@ -256,8 +260,8 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}) {
     }
   }
 
-  app.post("/v1/messages", handleMessages)
-  app.post("/messages", handleMessages)
+  app.post("/v1/messages", (c) => requestQueue.add(() => handleMessages(c)))
+  app.post("/messages", (c) => requestQueue.add(() => handleMessages(c)))
 
   return { app, config: finalConfig }
 }

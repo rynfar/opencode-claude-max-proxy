@@ -8,7 +8,7 @@ import { glob as globLib } from "glob"
 
 const execAsync = promisify(exec)
 
-const getCwd = () => process.cwd()
+const getCwd = () => process.env.CLAUDE_PROXY_WORKDIR || process.cwd()
 
 export const opencodeMcpServer = createSdkMcpServer({
   name: "opencode",

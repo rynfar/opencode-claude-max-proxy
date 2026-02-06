@@ -151,6 +151,7 @@ Now just run `oc` to start OpenCode with Claude Max.
 |---------------------|---------|-------------|
 | `CLAUDE_PROXY_PORT` | 3456 | Proxy server port |
 | `CLAUDE_PROXY_HOST` | 127.0.0.1 | Proxy server host |
+| `CLAUDE_PROXY_WORKDIR` | (process cwd) | Base working directory used by MCP file/shell tools |
 
 ## How It Works
 

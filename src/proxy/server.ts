@@ -12,6 +12,7 @@ import { join, dirname } from "path"
 import { opencodeMcpServer } from "../mcpTools"
 import { randomUUID, createHash } from "crypto"
 import { withClaudeLogContext } from "../logger"
+import { fuzzyMatchAgentName } from "./agentMatch"
 
 // --- Session Tracking ---
 // Maps OpenCode session ID (or fingerprint) → Claude SDK session ID
@@ -204,16 +205,17 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}) {
         }
       }
 
-      // Extract available agent types from the Task tool definition and inject as a hint.
-      // This prevents Claude from guessing wrong agent names (e.g., "Explore" instead of "explore").
+      // Extract available agent types from the Task tool definition.
+      // Used for: 1) prompt hint injection, 2) fuzzy matching in tool_use normalization
+      let validAgentNames: string[] = []
       if (Array.isArray(body.tools)) {
         const taskTool = body.tools.find((t: any) => t.name === "task" || t.name === "Task")
         if (taskTool?.description) {
           const agentMatch = taskTool.description.match(/Available agent types.*?:\n((?:- \w[\w-]*:.*\n?)+)/s)
           if (agentMatch) {
-            const agentNames = [...agentMatch[1].matchAll(/^- (\w[\w-]*):/gm)].map(m => m[1])
-            if (agentNames.length > 0) {
-              systemContext += `\n\nIMPORTANT: When using the task/Task tool, the subagent_type parameter must be one of these exact values (case-sensitive, lowercase): ${agentNames.join(", ")}. Do NOT capitalize or modify these names.`
+            validAgentNames = [...agentMatch[1].matchAll(/^- (\w[\w-]*):/gm)].map(m => m[1])
+            if (validAgentNames.length > 0) {
+              systemContext += `\n\nIMPORTANT: When using the task/Task tool, the subagent_type parameter must be one of these exact values (case-sensitive, lowercase): ${validAgentNames.join(", ")}. Do NOT capitalize or modify these names.`
             }
           }
         }
@@ -311,11 +313,13 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}) {
                 // Preserve ALL content blocks (text, tool_use, thinking, etc.)
                 for (const block of message.message.content) {
                   const b = block as Record<string, unknown>
-                  // Normalize task tool_use: lowercase subagent_type
+                  // Normalize task tool_use: fuzzy match subagent_type to valid agent names
                   if (b.type === "tool_use" && typeof b.name === "string" &&
                       (b.name === "task" || b.name === "Task") &&
                       b.input && typeof (b.input as any).subagent_type === "string") {
-                    (b.input as any).subagent_type = (b.input as any).subagent_type.toLowerCase()
+                    (b.input as any).subagent_type = fuzzyMatchAgentName(
+                      (b.input as any).subagent_type, validAgentNames
+                    )
                   }
                   contentBlocks.push(b)
                 }
@@ -553,10 +557,11 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}) {
                         taskBlockIndices.has(eventIndex)) {
                       const delta = (event as any).delta
                       if (delta?.type === "input_json_delta" && typeof delta.partial_json === "string") {
-                        // Replace capitalized subagent_type values with lowercase
+                        // Fuzzy match subagent_type to valid agent names
                         const normalized = delta.partial_json.replace(
                           /("subagent_type"\s*:\s*")([^"]+)(")/g,
-                          (_: string, pre: string, name: string, post: string) => `${pre}${name.toLowerCase()}${post}`
+                          (_: string, pre: string, name: string, post: string) =>
+                            `${pre}${fuzzyMatchAgentName(name, validAgentNames)}${post}`
                         )
                         if (normalized !== delta.partial_json) {
                           eventToForward = {

@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.6.1](https://github.com/rynfar/opencode-claude-max-proxy/compare/v1.6.0...v1.6.1) (2026-03-20)
+
+
+### Bug Fixes
+
+* block all Claude Code-only tools in passthrough mode ([92fbe7b](https://github.com/rynfar/opencode-claude-max-proxy/commit/92fbe7bd6ade265d70726c672ff9f4c119d42d3d)), closes [#35](https://github.com/rynfar/opencode-claude-max-proxy/issues/35)
+* block Claude Code-only tools in passthrough mode ([c06d1ea](https://github.com/rynfar/opencode-claude-max-proxy/commit/c06d1ea0ecbaaac984c129d3121185badcd1de7f)), closes [#35](https://github.com/rynfar/opencode-claude-max-proxy/issues/35)
+* only block tools with no OpenCode equivalent ([cc73e9e](https://github.com/rynfar/opencode-claude-max-proxy/commit/cc73e9eac063ac22053e84c9244dc9c8de6a2a0e)), closes [#35](https://github.com/rynfar/opencode-claude-max-proxy/issues/35)
+
 ## [1.6.0](https://github.com/rynfar/opencode-claude-max-proxy/compare/v1.5.0...v1.6.0) (2026-03-20)
 
 

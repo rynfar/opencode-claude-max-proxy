@@ -423,11 +423,24 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}) {
       let structuredMessages: Array<{ type: "user"; message: { role: string; content: any }; parent_tool_use_id: null; session_id: string }> | undefined
       if (hasMultimodalContent) {
         const sessionId = randomUUID()
+        // Strip cache_control from content blocks — the SDK manages its own caching
+        // and OpenCode's ttl='1h' blocks conflict with the SDK's ttl='5m' blocks
+        const stripCacheControl = (content: any) => {
+          if (typeof content === "string") return content
+          if (!Array.isArray(content)) return content
+          return content.map((block: any) => {
+            if (block.cache_control) {
+              const { cache_control, ...rest } = block
+              return rest
+            }
+            return block
+          })
+        }
         structuredMessages = messagesToConvert
           ?.filter((m: any) => m.role === "user")
           .map((m: any) => ({
             type: "user" as const,
-            message: { role: m.role, content: m.content },
+            message: { role: m.role, content: stripCacheControl(m.content) },
             parent_tool_use_id: null,
             session_id: sessionId,
           }))
@@ -1007,6 +1020,12 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}) {
         mode: process.env.CLAUDE_PROXY_PASSTHROUGH ? "passthrough" : "internal",
       })
     }
+  })
+
+  // Catch-all: log any unhandled requests (helps debug missing endpoints like /v1/files)
+  app.all("*", (c) => {
+    console.error(`[PROXY] UNHANDLED ${c.req.method} ${c.req.url}`)
+    return c.json({ error: { type: "not_found", message: `Endpoint not supported: ${c.req.method} ${new URL(c.req.url).pathname}` } }, 404)
   })
 
   return { app, config: finalConfig }

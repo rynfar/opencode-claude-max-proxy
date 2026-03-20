@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.7.1](https://github.com/rynfar/opencode-claude-max-proxy/compare/v1.7.0...v1.7.1) (2026-03-20)
+
+
+### Bug Fixes
+
+* add NPM_TOKEN to publish workflow ([8339bb0](https://github.com/rynfar/opencode-claude-max-proxy/commit/8339bb09d258f54df6dbd96df96192ec25f20b37))
+
 ## [1.7.0](https://github.com/rynfar/opencode-claude-max-proxy/compare/v1.6.1...v1.7.0) (2026-03-20)
 
 

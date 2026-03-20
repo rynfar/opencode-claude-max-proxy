@@ -1,6 +1,6 @@
 {
   "name": "opencode-claude-max-proxy",
-  "version": "1.7.0",
+  "version": "1.7.1",
   "description": "Use your Claude Max subscription with OpenCode via proxy server",
   "type": "module",
   "main": "./src/proxy/server.ts",

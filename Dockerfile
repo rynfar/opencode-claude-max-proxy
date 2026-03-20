@@ -3,7 +3,8 @@ FROM node:22 AS build
 
 RUN npm install -g bun \
     && npm cache clean --force \
-    && useradd -m -s /bin/bash claude \
+    && userdel -r node \
+    && useradd -m -s /bin/bash -u 1000 claude \
     && mkdir -p /home/claude/.claude \
     && chown -R claude:claude /home/claude
 
@@ -21,7 +22,8 @@ FROM node:22-slim
 
 COPY --from=build /usr/local/bin/bun /usr/local/bin/
 
-RUN useradd -m -s /bin/bash claude \
+RUN userdel -r node \
+    && useradd -m -s /bin/bash -u 1000 claude \
     && mkdir -p /home/claude/.claude \
     && chown -R claude:claude /home/claude
 

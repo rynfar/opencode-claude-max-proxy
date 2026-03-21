@@ -28,11 +28,134 @@ interface SessionState {
   messageCount: number
 }
 
-const sessionCache = new Map<string, SessionState>()
-const fingerprintCache = new Map<string, SessionState>()
+class LRUMap<K, V> implements Iterable<[K, V]> {
+  private readonly map = new Map<K, V>()
+
+  constructor(
+    private readonly maxSize: number,
+    private readonly onEvict?: (key: K, value: V) => void
+  ) {}
+
+  get size(): number {
+    return this.map.size
+  }
+
+  get(key: K): V | undefined {
+    const value = this.map.get(key)
+    if (value === undefined) return undefined
+    this.map.delete(key)
+    this.map.set(key, value)
+    return value
+  }
+
+  set(key: K, value: V): this {
+    if (this.map.has(key)) {
+      this.map.delete(key)
+    } else if (this.map.size >= this.maxSize) {
+      this.evictOldest()
+    }
+
+    this.map.set(key, value)
+    return this
+  }
+
+  has(key: K): boolean {
+    return this.map.has(key)
+  }
+
+  delete(key: K): boolean {
+    return this.map.delete(key)
+  }
+
+  clear(): void {
+    this.map.clear()
+  }
+
+  entries(): MapIterator<[K, V]> {
+    return this.map.entries()
+  }
+
+  keys(): MapIterator<K> {
+    return this.map.keys()
+  }
+
+  values(): MapIterator<V> {
+    return this.map.values()
+  }
+
+  [Symbol.iterator](): MapIterator<[K, V]> {
+    return this.map[Symbol.iterator]()
+  }
+
+  private evictOldest(): void {
+    const oldestKey = this.map.keys().next().value as K | undefined
+    if (oldestKey === undefined) return
+
+    const oldestValue = this.map.get(oldestKey)
+    if (oldestValue === undefined) return
+
+    this.map.delete(oldestKey)
+    this.onEvict?.(oldestKey, oldestValue)
+  }
+}
+
+const DEFAULT_MAX_SESSIONS = 1000
+
+export function getMaxSessionsLimit(): number {
+  const raw = process.env.CLAUDE_PROXY_MAX_SESSIONS
+  if (!raw) return DEFAULT_MAX_SESSIONS
+
+  const parsed = Number.parseInt(raw, 10)
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    console.warn(`[PROXY] Invalid CLAUDE_PROXY_MAX_SESSIONS value "${raw}"; using default ${DEFAULT_MAX_SESSIONS}`)
+    return DEFAULT_MAX_SESSIONS
+  }
+
+  return parsed
+}
+
+let sessionCache: LRUMap<string, SessionState>
+let fingerprintCache: LRUMap<string, SessionState>
+let activeSessionCacheSize = 0
+
+function removeFingerprintEntriesByClaudeSessionId(claudeSessionId: string): void {
+  for (const [key, state] of fingerprintCache.entries()) {
+    if (state.claudeSessionId === claudeSessionId) {
+      fingerprintCache.delete(key)
+    }
+  }
+}
+
+function removeSessionEntriesByClaudeSessionId(claudeSessionId: string): void {
+  for (const [key, state] of sessionCache.entries()) {
+    if (state.claudeSessionId === claudeSessionId) {
+      sessionCache.delete(key)
+    }
+  }
+}
+
+function initializeSessionCaches(maxSize: number): void {
+  activeSessionCacheSize = maxSize
+  sessionCache = new LRUMap<string, SessionState>(maxSize, (_key, evictedState) => {
+    removeFingerprintEntriesByClaudeSessionId(evictedState.claudeSessionId)
+  })
+  fingerprintCache = new LRUMap<string, SessionState>(maxSize, (_key, evictedState) => {
+    removeSessionEntriesByClaudeSessionId(evictedState.claudeSessionId)
+  })
+}
+
+function ensureSessionCacheLimit(): void {
+  const configuredLimit = getMaxSessionsLimit()
+  if (configuredLimit !== activeSessionCacheSize) {
+    initializeSessionCaches(configuredLimit)
+  }
+}
+
+initializeSessionCaches(getMaxSessionsLimit())
 
 /** Clear all session caches (used in tests) */
 export function clearSessionCache() {
+  ensureSessionCacheLimit()
   sessionCache.clear()
   fingerprintCache.clear()
   // Also clear shared file store
@@ -322,6 +445,7 @@ function isClosedControllerError(error: unknown): boolean {
 }
 
 export function createProxyServer(config: Partial<ProxyConfig> = {}) {
+  ensureSessionCacheLimit()
   const finalConfig = { ...DEFAULT_PROXY_CONFIG, ...config }
   const app = new Hono()
 

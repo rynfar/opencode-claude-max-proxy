@@ -1,52 +1,78 @@
 #!/usr/bin/env node
 
-import { startProxyServer } from "../src/proxy/server"
-import { exec as execCallback } from "child_process"
-import { promisify } from "util"
+import { exec as execCallback } from "node:child_process";
+import { promisify } from "node:util";
+import { logger } from "@/logger";
+import type { ProxyConfig } from "@/proxy";
+import { startProxyServer } from "@/proxy";
 
-const exec = promisify(execCallback)
+const exec = promisify(execCallback);
+installProcessGuards();
 
-// Prevent SDK subprocess crashes from killing the proxy
-process.on("uncaughtException", (err) => {
-  console.error(`[PROXY] Uncaught exception (recovered): ${err.message}`)
-})
-process.on("unhandledRejection", (reason) => {
-  console.error(`[PROXY] Unhandled rejection (recovered): ${reason instanceof Error ? reason.message : reason}`)
-})
+type ClaudeAuthStatus = {
+  loggedIn?: boolean;
+  subscriptionType?: string;
+};
 
-const port = parseInt(process.env.CLAUDE_PROXY_PORT || "3456", 10)
-const host = process.env.CLAUDE_PROXY_HOST || "127.0.0.1"
-const idleTimeoutSeconds = parseInt(process.env.CLAUDE_PROXY_IDLE_TIMEOUT_SECONDS || "120", 10)
+function readProxyConfig(): Partial<ProxyConfig> {
+  return {
+    port: Number.parseInt(process.env.CLAUDE_PROXY_PORT || "3456", 10),
+    host: process.env.CLAUDE_PROXY_HOST || "127.0.0.1",
+    idleTimeoutSeconds: Number.parseInt(
+      process.env.CLAUDE_PROXY_IDLE_TIMEOUT_SECONDS || "120",
+      10,
+    ),
+  };
+}
 
-export async function runCli(
-  start = startProxyServer,
-  runExec: typeof exec = exec
-) {
-  // Pre-flight auth check
+function installProcessGuards() {
+  process.on("uncaughtException", (err) => {
+    logger.error("Uncaught exception", { message: err.message });
+  });
+  process.on("unhandledRejection", (reason) => {
+    const message = reason instanceof Error ? reason.message : String(reason);
+    logger.error("Unhandled promise rejection", { message });
+  });
+}
+
+async function ensureClaudeAuth() {
   try {
-    const { stdout } = await runExec("claude auth status", { timeout: 5000 })
-    const auth = JSON.parse(stdout)
+    const { stdout } = await exec("claude auth status", { timeout: 5000 });
+    const auth = JSON.parse(stdout) as ClaudeAuthStatus;
     if (!auth.loggedIn) {
-      console.error("\x1b[31m✗ Not logged in to Claude.\x1b[0m Run: claude login")
-      process.exit(1)
+      logger.error("Not signed in to Claude Code. Run: claude login");
+      process.exit(1);
     }
     if (auth.subscriptionType !== "max") {
-      console.error(`\x1b[33m⚠ Claude subscription: ${auth.subscriptionType || "unknown"} (Max recommended)\x1b[0m`)
+      logger.warn(
+        `Subscription is ${auth.subscriptionType ?? "unknown"}; Claude Max is recommended for this proxy.`,
+      );
     }
   } catch {
-    console.error("\x1b[33m⚠ Could not verify Claude auth status. If requests fail, run: claude login\x1b[0m")
+    logger.warn(
+      "Could not run `claude auth status`. If requests fail, run: claude login",
+    );
   }
-
-  const proxy = await start({ port, host, idleTimeoutSeconds })
-
-  // Handle EADDRINUSE — preserve CLI behavior of exiting on port conflict
-  proxy.server.on("error", (error: NodeJS.ErrnoException) => {
-    if (error.code === "EADDRINUSE") {
-      process.exit(1)
-    }
-  })
 }
 
-if (import.meta.main) {
-  await runCli()
+function printOpencodeHint(host: string, port: number) {
+  const baseUrl = `http://${host}:${port}`;
+  logger.box(
+    `OpenCode — point Anthropic at this proxy:
+
+ANTHROPIC_API_KEY=dummy ANTHROPIC_BASE_URL=${baseUrl} opencode`,
+  );
 }
+
+async function main() {
+  const config = readProxyConfig();
+  await ensureClaudeAuth();
+  const instance = await startProxyServer(config);
+  printOpencodeHint(instance.config.host, instance.config.port);
+}
+
+main().catch((err) => {
+  const message = err instanceof Error ? err.message : String(err);
+  logger.error("Proxy failed to start", { message });
+  process.exit(1);
+});

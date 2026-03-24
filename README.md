@@ -82,16 +82,16 @@ bun install
 ```bash
 git clone https://github.com/rynfar/opencode-claude-max-proxy
 cd opencode-claude-max-proxy
-docker compose up -d
+docker compose -f docker/docker-compose.yml up -d
 
 # Login to Claude inside the container (one-time)
-docker compose exec proxy claude login
+docker compose -f docker/docker-compose.yml exec proxy claude login
 
 # Verify
 curl http://127.0.0.1:3456/health
 ```
 
-> On macOS, use `./bin/docker-auth.sh` to copy host credentials into the container (handles the keychain/scopes format difference). On Linux, volume-mounting `~/.claude` may work directly.
+> On macOS, use `./docker/docker-auth.sh` to copy host credentials into the container (handles the keychain/scopes format difference). On Linux, volume-mounting `~/.claude` may work directly.
 
 ## Connect OpenCode
 
@@ -102,7 +102,7 @@ Once the proxy is running, point OpenCode at it via environment variables or con
 ```bash
 # Terminal 1: start the proxy
 CLAUDE_PROXY_PASSTHROUGH=1 claude-max-proxy
-# or: CLAUDE_PROXY_PASSTHROUGH=1 bun run proxy (from source)
+# or: CLAUDE_PROXY_PASSTHROUGH=1 bun run dev (from source)
 
 # Terminal 2+: connect OpenCode
 ANTHROPIC_API_KEY=dummy ANTHROPIC_BASE_URL=http://127.0.0.1:3456 opencode
@@ -166,19 +166,14 @@ In internal mode, a `PreToolUse` hook fuzzy-matches agent names (e.g., `general-
 
 ## Session Resume
 
-The proxy tracks SDK session IDs and resumes conversations on follow-up requests. Sessions are stored in `~/.cache/opencode-claude-max-proxy/sessions.json`, shared across all proxy instances.
+The proxy tracks SDK session IDs and resumes conversations on follow-up requests. Sessions are stored in `~/.cache/opencode-claude-max-proxy/sessions.json`, shared across all proxy instances. An in-memory LRU cache (default 1000 entries, configurable via `CLAUDE_PROXY_MAX_SESSIONS`) provides fast lookups with automatic eviction and disk-store fallback.
 
 Lookup order:
 
-1. **Header-based** — use the included OpenCode plugin to inject session headers:
-   ```json
-   {
-     "plugin": ["./path/to/opencode-claude-max-proxy/src/plugin/claude-max-headers.ts"]
-   }
-   ```
+1. **Header-based** — if the OpenCode request includes session headers
 2. **Fingerprint-based** (automatic fallback) — hashes the first user message to match returning conversations
 
-Sessions expire after 24 hours.
+Lineage verification detects diverged history (undo, edit, branch) and avoids resuming stale sessions. Sessions expire after 24 hours.
 
 ## Configuration
 
@@ -190,6 +185,8 @@ Sessions expire after 24 hours.
 | `CLAUDE_PROXY_WORKDIR`              | (cwd)     | Working directory for Claude and tools                   |
 | `CLAUDE_PROXY_MAX_CONCURRENT`       | 1         | Max concurrent SDK sessions (increase with caution)      |
 | `CLAUDE_PROXY_IDLE_TIMEOUT_SECONDS` | 120       | Connection idle timeout                                  |
+| `CLAUDE_PROXY_MAX_SESSIONS`         | 1000      | Max cached session entries (LRU eviction)                |
+| `LOG_LEVEL`                         | info      | Log verbosity: `silent`, `error`, `warn`, `info`, `debug`, `verbose` |
 
 ## Concurrency
 
@@ -263,7 +260,11 @@ launchctl load ~/Library/LaunchAgents/com.claude-max-proxy.plist
 ## Development
 
 ```bash
+bun run dev                           # Watch mode (auto-restart on changes)
 bun test                              # Run tests
+bun run lint                          # Lint with Biome
+bun run typecheck                     # Type-check without emitting
+bun run build                         # Compile to dist/
 curl http://127.0.0.1:3456/health     # Auth status, subscription, mode
 ```
 
@@ -271,15 +272,55 @@ curl http://127.0.0.1:3456/health     # Auth status, subscription, mode
 
 ```
 src/
+├── index.ts                # Package exports (logger, createProxyServer, startProxy, stopProxy)
 ├── proxy/
-│   ├── server.ts      # HTTP server, passthrough/internal modes, SSE streaming, session resume
-│   ├── agentDefs.ts   # Extract SDK agent definitions from OpenCode's Task tool
-│   ├── agentMatch.ts  # Fuzzy matching for agent names (6-level priority)
-│   └── types.ts       # ProxyConfig types and defaults
-├── mcpTools.ts        # MCP tool definitions for internal mode (read, write, edit, bash, glob, grep)
-├── logger.ts          # Structured logging with AsyncLocalStorage context
-├── plugin/
-    └── claude-max-headers.ts  # OpenCode plugin for session header injection
+│   ├── index.ts            # Hono app, routes, Node HTTP server lifecycle
+│   ├── env.ts              # Hono env type definitions (telemetry vars)
+│   ├── health.ts           # /health endpoint (Claude auth check)
+│   ├── throttle.ts         # Concurrency limit for /messages
+│   ├── session/
+│   │   ├── index.ts        # LRU session cache with disk-store fallback
+│   │   ├── store.ts        # Shared file store (~/.cache/…/sessions.json)
+│   │   └── lineage.ts      # Fingerprinting & lineage verification
+│   └── telemetry/
+│       ├── mount.ts        # Route mounting
+│       ├── routes.ts       # GET /telemetry, /telemetry/requests, /telemetry/summary
+│       ├── store.ts        # Metrics ring buffer
+│       ├── context.ts      # Per-request telemetry context
+│       ├── dashboard.ts    # HTML dashboard
+│       └── types.ts        # Telemetry type definitions
+├── providers/
+│   ├── messages.ts         # Shared message type utilities
+│   ├── errors.ts           # Error classification
+│   ├── types.ts            # Shared provider types
+│   └── claude/
+│       ├── index.ts        # Orchestrator: parse → session → hooks → query
+│       ├── parse.ts        # Request parsing & Claude executable resolution
+│       ├── prompt.ts       # Message conversion & prompt building
+│       ├── options.ts      # SDK query option builder
+│       ├── hooks.ts        # PreToolUse hook (tool capture & blocking)
+│       ├── agents.ts       # Agent extraction from Task tool description
+│       ├── passthrough.ts  # Dynamic MCP tool registration for passthrough mode
+│       ├── mcp-tools.ts    # MCP tool definitions for internal mode
+│       ├── stream.ts       # Streaming response handler (SSE)
+│       ├── non-stream.ts   # Non-streaming response handler
+│       ├── errors.ts       # Claude-specific error classification
+│       ├── constants.ts    # SDK constants
+│       └── types.ts        # Claude provider types
+├── logger/
+│   ├── index.ts            # Structured logging (consola)
+│   └── sanitizer.ts        # Log sanitization
+└── utils/
+    └── lru-map.ts          # Generic LRU map with eviction callbacks
+tests/                      # Unit & integration tests (bun test)
+bin/
+├── cli.ts                  # CLI entry point
+└── claude-proxy-supervisor.sh  # Auto-restart supervisor
+docker/
+├── Dockerfile              # Multi-stage build (bun build → node:22-alpine)
+├── docker-compose.yml      # Docker Compose config
+├── entrypoint.sh           # Container entrypoint
+└── docker-auth.sh          # macOS credential helper
 ```
 
 ## Disclaimer

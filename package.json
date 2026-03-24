@@ -3,39 +3,43 @@
   "version": "1.17.0",
   "description": "Use your Claude Max subscription with OpenCode via proxy server",
   "type": "module",
-  "main": "./dist/server.js",
-  "types": "./dist/proxy/server.d.ts",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "bin": {
     "claude-max-proxy": "./dist/cli.js"
   },
   "exports": {
     ".": {
-      "types": "./dist/proxy/server.d.ts",
-      "default": "./dist/server.js"
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
     }
   },
   "engines": {
     "node": ">=22"
   },
   "scripts": {
-    "start": "./bin/claude-proxy-supervisor.sh",
-    "proxy": "./bin/claude-proxy-supervisor.sh",
-    "build": "rm -rf dist && bun build bin/cli.ts src/proxy/server.ts --outdir dist --target node --splitting --external @anthropic-ai/claude-agent-sdk --entry-naming '[name].js' && tsc -p tsconfig.build.json",
-    "postbuild": "node --check dist/cli.js && node --check dist/server.js && test -f dist/proxy/server.d.ts",
-    "prepublishOnly": "bun run build",
-    "test": "bun test",
+    "dev": "bun --watch run bin/cli.ts",
+    "build": "bun scripts/build.ts",
+    "start": "node ./dist/cli.js",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "format": "biome format --write .",
     "typecheck": "tsc --noEmit",
-    "proxy:direct": "bun run ./bin/cli.ts"
+    "test": "bun test",
+    "clean": "rm -rf dist && rm -rf node_modules"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.2.80"
+    "@anthropic-ai/claude-agent-sdk": "^0.2.80",
+    "@hono/node-server": "^1.19.11",
+    "consola": "^3.4.2",
+    "hono": "^4.11.4",
+    "glob": "^13.0.0"
   },
   "devDependencies": {
-    "@hono/node-server": "^1.19.11",
+    "@biomejs/biome": "^2.4.8",
     "@types/bun": "^1.3.11",
     "@types/node": "^22.0.0",
-    "glob": "^13.0.0",
-    "hono": "^4.11.4",
+    "dts-bundle-generator": "^9.5.1",
     "typescript": "^5.8.2"
   },
   "files": [

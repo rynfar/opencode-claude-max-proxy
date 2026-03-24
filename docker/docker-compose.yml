@@ -1,0 +1,27 @@
+services:
+  # Fix volume permissions on first run (volumes created as root)
+  init:
+    image: busybox
+    user: root
+    volumes:
+      - claude-auth:/home/claude/.claude
+    entrypoint: ["sh", "-c", "chown -R 1000:1000 /home/claude/.claude"]
+    restart: "no"
+
+  proxy:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: claude-max-proxy
+    user: "claude"
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    ports:
+      - "3456:3456"
+    volumes:
+      - claude-auth:/home/claude/.claude
+    restart: unless-stopped
+
+volumes:
+  claude-auth:

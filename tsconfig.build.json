@@ -1,15 +1,13 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
-    "noEmit": false,
-    "declaration": true,
-    "declarationMap": true,
+    "types": ["node"],
+    "lib": ["ESNext", "DOM"],
     "emitDeclarationOnly": true,
-    "outDir": "./dist",
-    "allowImportingTsExtensions": false
+    "declaration": true,
+    "rootDir": "src",
+    "outDir": "dist"
   },
-  "include": [],
-  "files": [
-    "src/proxy/server.ts"
-  ]
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist", "tests", "bin"]
 }

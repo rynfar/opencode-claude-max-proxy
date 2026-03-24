@@ -22,7 +22,7 @@ function resolveLogLevel(): LogLevel {
 
 const consola = createConsola({
   level: resolveLogLevel(),
-  formatOptions: { date: true },
+  formatOptions: { date: false },
 });
 
 // Wrap all consola methods with sanitizer

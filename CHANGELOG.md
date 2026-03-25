@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.17.1](https://github.com/rynfar/opencode-claude-max-proxy/compare/v1.17.0...v1.17.1) (2026-03-25)
+
+
+### Bug Fixes
+
+* prevent @hono/node-server from overriding global Response/Request ([#141](https://github.com/rynfar/opencode-claude-max-proxy/issues/141)) ([64b9a1d](https://github.com/rynfar/opencode-claude-max-proxy/commit/64b9a1d01034de1ffb60fe0ddfb57d4c1916056b))
+
 ## [1.17.0](https://github.com/rynfar/opencode-claude-max-proxy/compare/v1.16.2...v1.17.0) (2026-03-24)
 
 

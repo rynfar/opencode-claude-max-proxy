@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test"
 
 const { createProxyServer, startProxyServer } = await import("../proxy/server")
+const { resetCachedClaudeAuthStatus } = await import("../proxy/models")
 const { runCli } = await import("../../bin/cli")
 
 describe("proxy async ops", () => {
@@ -45,6 +46,7 @@ describe("proxy async ops", () => {
   })
 
   it("returns degraded health when auth status command times out", async () => {
+    resetCachedClaudeAuthStatus()
     const originalPath = process.env.PATH
     process.env.PATH = ""
 

@@ -1,10 +1,17 @@
 /**
  * Unit tests for model mapping and utility functions.
  */
-import { describe, it, expect } from "bun:test"
-import { mapModelToClaudeModel, isClosedControllerError } from "../proxy/models"
+import { afterEach, describe, it, expect } from "bun:test"
+import { mapModelToClaudeModel, isClosedControllerError, resetCachedClaudeAuthStatus } from "../proxy/models"
 
 describe("mapModelToClaudeModel", () => {
+  const originalSonnetModel = process.env.CLAUDE_PROXY_SONNET_MODEL
+
+  afterEach(() => {
+    if (originalSonnetModel === undefined) delete process.env.CLAUDE_PROXY_SONNET_MODEL
+    else process.env.CLAUDE_PROXY_SONNET_MODEL = originalSonnetModel
+    resetCachedClaudeAuthStatus()
+  })
   it("maps opus models to opus[1m]", () => {
     expect(mapModelToClaudeModel("claude-opus-4-5")).toBe("opus[1m]")
     expect(mapModelToClaudeModel("opus")).toBe("opus[1m]")
@@ -16,15 +23,29 @@ describe("mapModelToClaudeModel", () => {
     expect(mapModelToClaudeModel("haiku")).toBe("haiku")
   })
 
-  it("defaults to sonnet[1m] for sonnet models", () => {
-    expect(mapModelToClaudeModel("claude-sonnet-4-5")).toBe("sonnet[1m]")
-    expect(mapModelToClaudeModel("sonnet")).toBe("sonnet[1m]")
-    expect(mapModelToClaudeModel("claude-sonnet-4-5-20250929")).toBe("sonnet[1m]")
+  it("maps sonnet models to sonnet[1m] for max subscriptions", () => {
+    expect(mapModelToClaudeModel("claude-sonnet-4-5", "max")).toBe("sonnet[1m]")
+    expect(mapModelToClaudeModel("sonnet", "max")).toBe("sonnet[1m]")
+    expect(mapModelToClaudeModel("claude-sonnet-4-5-20250929", "max")).toBe("sonnet[1m]")
   })
 
-  it("defaults to sonnet[1m] for unknown models", () => {
-    expect(mapModelToClaudeModel("unknown-model")).toBe("sonnet[1m]")
-    expect(mapModelToClaudeModel("")).toBe("sonnet[1m]")
+  it("maps sonnet models to plain sonnet for non-max subscriptions", () => {
+    expect(mapModelToClaudeModel("claude-sonnet-4-5", "team")).toBe("sonnet")
+    expect(mapModelToClaudeModel("sonnet", "pro")).toBe("sonnet")
+    expect(mapModelToClaudeModel("claude-sonnet-4-5-20250929", "")).toBe("sonnet")
+  })
+
+  it("defaults unknown models to plain sonnet for non-max subscriptions", () => {
+    expect(mapModelToClaudeModel("unknown-model")).toBe("sonnet")
+    expect(mapModelToClaudeModel("", undefined)).toBe("sonnet")
+  })
+
+  it("respects explicit sonnet model override", () => {
+    process.env.CLAUDE_PROXY_SONNET_MODEL = "sonnet[1m]"
+    expect(mapModelToClaudeModel("sonnet", "team")).toBe("sonnet[1m]")
+
+    process.env.CLAUDE_PROXY_SONNET_MODEL = "sonnet"
+    expect(mapModelToClaudeModel("sonnet", "max")).toBe("sonnet")
   })
 })
 

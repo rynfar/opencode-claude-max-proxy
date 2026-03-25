@@ -20,7 +20,7 @@ import { createPassthroughMcpServer, stripMcpPrefix, PASSTHROUGH_MCP_NAME, PASST
 import { telemetryStore, diagnosticLog, createTelemetryRoutes, landingHtml } from "../telemetry"
 import type { RequestMetric } from "../telemetry"
 import { classifyError } from "./errors"
-import { mapModelToClaudeModel, resolveClaudeExecutableAsync, isClosedControllerError } from "./models"
+import { mapModelToClaudeModel, resolveClaudeExecutableAsync, isClosedControllerError, getClaudeAuthStatusAsync } from "./models"
 import { ALLOWED_MCP_TOOLS } from "./tools"
 import { getLastUserMessage } from "./messages"
 import { openCodeAdapter } from "./adapters/opencode"
@@ -108,7 +108,8 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
     return withClaudeLogContext({ requestId: requestMeta.requestId, endpoint: requestMeta.endpoint }, async () => {
       try {
         const body = await c.req.json()
-        const model = mapModelToClaudeModel(body.model || "sonnet")
+        const authStatus = await getClaudeAuthStatusAsync()
+        const model = mapModelToClaudeModel(body.model || "sonnet", authStatus?.subscriptionType)
         const stream = body.stream ?? true
         const adapter = openCodeAdapter
         const workingDirectory = adapter.extractWorkingDirectory(body) || process.env.CLAUDE_PROXY_WORKDIR || process.cwd()
@@ -938,8 +939,14 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
   // Health check endpoint — verifies auth status
   app.get("/health", async (c) => {
     try {
-      const { stdout } = await exec("claude auth status", { timeout: 5000 })
-      const auth = JSON.parse(stdout)
+      const auth = await getClaudeAuthStatusAsync()
+      if (!auth) {
+        return c.json({
+          status: "degraded",
+          error: "Could not verify auth status",
+          mode: process.env.CLAUDE_PROXY_PASSTHROUGH ? "passthrough" : "internal",
+        })
+      }
       if (!auth.loggedIn) {
         return c.json({
           status: "unhealthy",

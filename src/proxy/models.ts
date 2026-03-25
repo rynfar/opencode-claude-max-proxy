@@ -11,11 +11,47 @@ import { promisify } from "util"
 const exec = promisify(execCallback)
 
 export type ClaudeModel = "sonnet" | "sonnet[1m]" | "opus" | "opus[1m]" | "haiku"
+export interface ClaudeAuthStatus {
+  loggedIn?: boolean
+  subscriptionType?: string
+  email?: string
+}
 
-export function mapModelToClaudeModel(model: string): ClaudeModel {
+const AUTH_STATUS_CACHE_TTL_MS = 60_000
+
+let cachedAuthStatus: ClaudeAuthStatus | null = null
+let cachedAuthStatusAt = 0
+let cachedAuthStatusPromise: Promise<ClaudeAuthStatus | null> | null = null
+
+export function mapModelToClaudeModel(model: string, subscriptionType?: string | null): ClaudeModel {
   if (model.includes("opus")) return "opus[1m]"
   if (model.includes("haiku")) return "haiku"
-  return "sonnet[1m]"
+  const sonnetOverride = process.env.CLAUDE_PROXY_SONNET_MODEL
+  if (sonnetOverride === "sonnet" || sonnetOverride === "sonnet[1m]") return sonnetOverride
+  return subscriptionType === "max" ? "sonnet[1m]" : "sonnet"
+}
+
+export async function getClaudeAuthStatusAsync(): Promise<ClaudeAuthStatus | null> {
+  if (cachedAuthStatus && Date.now() - cachedAuthStatusAt < AUTH_STATUS_CACHE_TTL_MS) return cachedAuthStatus
+  if (cachedAuthStatusPromise) return cachedAuthStatusPromise
+
+  cachedAuthStatusPromise = (async () => {
+    try {
+      const { stdout } = await exec("claude auth status", { timeout: 5000 })
+      const parsed = JSON.parse(stdout) as ClaudeAuthStatus
+      cachedAuthStatus = parsed
+      cachedAuthStatusAt = Date.now()
+      return parsed
+    } catch {
+      return null
+    }
+  })()
+
+  try {
+    return await cachedAuthStatusPromise
+  } finally {
+    cachedAuthStatusPromise = null
+  }
 }
 
 // --- Claude Executable Resolution ---
@@ -73,6 +109,13 @@ export async function resolveClaudeExecutableAsync(): Promise<string> {
 export function resetCachedClaudePath(): void {
   cachedClaudePath = null
   cachedClaudePathPromise = null
+}
+
+/** Reset cached auth status — for testing only */
+export function resetCachedClaudeAuthStatus(): void {
+  cachedAuthStatus = null
+  cachedAuthStatusAt = 0
+  cachedAuthStatusPromise = null
 }
 
 /**

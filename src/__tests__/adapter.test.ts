@@ -25,6 +25,15 @@ describe("openCodeAdapter", () => {
     expect(openCodeAdapter.getSessionId(mockContext as any)).toBeUndefined()
   })
 
+  it("extracts profile ID from x-meridian-profile header", () => {
+    const mockContext = {
+      req: {
+        header: (name: string) => name === "x-meridian-profile" ? "company" : undefined
+      }
+    }
+    expect(openCodeAdapter.getProfileId(mockContext as any)).toBe("company")
+  })
+
   it("extracts working directory from system prompt env block", () => {
     const body = {
       system: "<env>\n  Working directory: /Users/test/project\n</env>"

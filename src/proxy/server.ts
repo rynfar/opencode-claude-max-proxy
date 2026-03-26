@@ -482,11 +482,9 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
               claudeExecutable = await resolveClaudeExecutableAsync()
             }
 
-            // Wrap SDK call with retry for stale undo UUIDs.
-            // If the first query fails because resumeSessionAt points to a
-            // UUID that no longer exists, evict the stale session and retry
-            // as a fresh session. The generator makes this transparent to the
-            // existing message-processing loop.
+            // Wrap SDK call with transparent retry for recoverable errors.
+            // Both stale-UUID and rate-limit retries happen inside the generator,
+            // so the message-processing loop doesn't need any retry logic.
             const response = (async function* () {
               try {
                 yield* query(buildQueryOptions({
@@ -495,23 +493,47 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
                   resumeSessionId, isUndo, undoRollbackUuid, sdkHooks, adapter,
                 }))
               } catch (error) {
-                if (!isStaleSessionError(error)) throw error
-                claudeLog("session.stale_uuid_retry", {
-                  mode: "non_stream",
-                  rollbackUuid: undoRollbackUuid,
-                  resumeSessionId,
-                })
-                console.error(`[PROXY] Stale session UUID, evicting and retrying as fresh session`)
-                evictSession(opencodeSessionId, workingDirectory, allMessages)
-                // Reset UUID tracking for fresh session
-                sdkUuidMap.length = 0
-                for (let i = 0; i < allMessages.length; i++) sdkUuidMap.push(null)
-                yield* query(buildQueryOptions({
-                  prompt: buildFreshPrompt(allMessages, stripCacheControl),
-                  model, workingDirectory, systemContext, claudeExecutable,
-                  passthrough, stream: false, sdkAgents, passthroughMcp, cleanEnv,
-                  resumeSessionId: undefined, isUndo: false, undoRollbackUuid: undefined, sdkHooks, adapter,
-                }))
+                const errMsg = error instanceof Error ? error.message : String(error)
+
+                // Retry 1: stale undo UUID — evict session and start fresh
+                if (isStaleSessionError(error)) {
+                  claudeLog("session.stale_uuid_retry", {
+                    mode: "non_stream",
+                    rollbackUuid: undoRollbackUuid,
+                    resumeSessionId,
+                  })
+                  console.error(`[PROXY] Stale session UUID, evicting and retrying as fresh session`)
+                  evictSession(opencodeSessionId, workingDirectory, allMessages)
+                  sdkUuidMap.length = 0
+                  for (let i = 0; i < allMessages.length; i++) sdkUuidMap.push(null)
+                  yield* query(buildQueryOptions({
+                    prompt: buildFreshPrompt(allMessages, stripCacheControl),
+                    model, workingDirectory, systemContext, claudeExecutable,
+                    passthrough, stream: false, sdkAgents, passthroughMcp, cleanEnv,
+                    resumeSessionId: undefined, isUndo: false, undoRollbackUuid: undefined, sdkHooks, adapter,
+                  }))
+                  return
+                }
+
+                // Retry 2: rate-limited on [1m] — fall back to base model
+                if (hasExtendedContext(model) && isRateLimitError(errMsg)) {
+                  model = stripExtendedContext(model)
+                  claudeLog("upstream.context_fallback", {
+                    mode: "non_stream",
+                    from: model,
+                    to: model,
+                    reason: "rate_limit",
+                  })
+                  console.error(`[PROXY] ${requestMeta.requestId} rate-limited on [1m], retrying with ${model}`)
+                  yield* query(buildQueryOptions({
+                    prompt: makePrompt(), model, workingDirectory, systemContext, claudeExecutable,
+                    passthrough, stream: false, sdkAgents, passthroughMcp, cleanEnv,
+                    resumeSessionId, isUndo, undoRollbackUuid, sdkHooks, adapter,
+                  }))
+                  return
+                }
+
+                throw error
               }
             })()
 
@@ -554,64 +576,13 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
               durationMs: Date.now() - upstreamStartAt
             })
           } catch (error) {
-            const errMsg = error instanceof Error ? error.message : String(error)
-
-            // Rate-limit fallback: if using [1m] context, retry with base model
-            if (hasExtendedContext(model) && isRateLimitError(errMsg)) {
-              const fallbackModel = stripExtendedContext(model)
-              claudeLog("upstream.context_fallback", {
-                mode: "non_stream",
-                from: model,
-                to: fallbackModel,
-                reason: "rate_limit",
-              })
-              console.error(`[PROXY] ${requestMeta.requestId} rate-limited on ${model}, retrying with ${fallbackModel}`)
-              model = fallbackModel
-
-              const retryResponse = query(buildQueryOptions({
-                prompt: makePrompt(), model, workingDirectory, systemContext, claudeExecutable,
-                passthrough, stream: false, sdkAgents, passthroughMcp, cleanEnv,
-                resumeSessionId, isUndo, undoRollbackUuid, sdkHooks, adapter,
-              }))
-
-              for await (const message of retryResponse) {
-                if ((message as any).session_id) {
-                  currentSessionId = (message as any).session_id
-                }
-                if (message.type === "assistant") {
-                  assistantMessages += 1
-                  if ((message as any).uuid) {
-                    sdkUuidMap.push((message as any).uuid)
-                  }
-                  if (!firstChunkAt) {
-                    firstChunkAt = Date.now()
-                  }
-                  for (const block of message.message.content) {
-                    const b = block as Record<string, unknown>
-                    if (passthrough && b.type === "tool_use" && typeof b.name === "string") {
-                      b.name = stripMcpPrefix(b.name as string)
-                    }
-                    contentBlocks.push(b)
-                  }
-                }
-              }
-
-              claudeLog("upstream.completed", {
-                mode: "non_stream",
-                model,
-                assistantMessages,
-                durationMs: Date.now() - upstreamStartAt,
-                fallback: true,
-              })
-            } else {
-              claudeLog("upstream.failed", {
-                mode: "non_stream",
-                model,
-                durationMs: Date.now() - upstreamStartAt,
-                error: errMsg
-              })
-              throw error
-            }
+            claudeLog("upstream.failed", {
+              mode: "non_stream",
+              model,
+              durationMs: Date.now() - upstreamStartAt,
+              error: error instanceof Error ? error.message : String(error)
+            })
+            throw error
           }
 
           // In passthrough mode, add captured tool_use blocks from the hook
@@ -739,14 +710,11 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
               : new Array(allMessages.length - 1).fill(null)
             while (sdkUuidMap.length < allMessages.length) sdkUuidMap.push(null)
 
-            // Track if we've sent a message_start to the client — hoisted for
-            // access in the catch block (rate-limit fallback is only safe if
-            // no content has been emitted yet).
             let messageStartEmitted = false
 
             try {
               let currentSessionId: string | undefined
-              // Same stale-UUID retry wrapper as the non-streaming path
+              // Same transparent retry wrapper as the non-streaming path
               const response = (async function* () {
                 try {
                   yield* query(buildQueryOptions({
@@ -755,22 +723,45 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
                     resumeSessionId, isUndo, undoRollbackUuid, sdkHooks, adapter,
                   }))
                 } catch (error) {
-                  if (!isStaleSessionError(error)) throw error
-                  claudeLog("session.stale_uuid_retry", {
-                    mode: "stream",
-                    rollbackUuid: undoRollbackUuid,
-                    resumeSessionId,
-                  })
-                  console.error(`[PROXY] Stale session UUID, evicting and retrying as fresh session`)
-                  evictSession(opencodeSessionId, workingDirectory, allMessages)
-                  sdkUuidMap.length = 0
-                  for (let i = 0; i < allMessages.length; i++) sdkUuidMap.push(null)
-                  yield* query(buildQueryOptions({
-                    prompt: buildFreshPrompt(allMessages, stripCacheControl),
-                    model, workingDirectory, systemContext, claudeExecutable,
-                    passthrough, stream: true, sdkAgents, passthroughMcp, cleanEnv,
-                    resumeSessionId: undefined, isUndo: false, undoRollbackUuid: undefined, sdkHooks, adapter,
-                  }))
+                  const errMsg = error instanceof Error ? error.message : String(error)
+
+                  if (isStaleSessionError(error)) {
+                    claudeLog("session.stale_uuid_retry", {
+                      mode: "stream",
+                      rollbackUuid: undoRollbackUuid,
+                      resumeSessionId,
+                    })
+                    console.error(`[PROXY] Stale session UUID, evicting and retrying as fresh session`)
+                    evictSession(opencodeSessionId, workingDirectory, allMessages)
+                    sdkUuidMap.length = 0
+                    for (let i = 0; i < allMessages.length; i++) sdkUuidMap.push(null)
+                    yield* query(buildQueryOptions({
+                      prompt: buildFreshPrompt(allMessages, stripCacheControl),
+                      model, workingDirectory, systemContext, claudeExecutable,
+                      passthrough, stream: true, sdkAgents, passthroughMcp, cleanEnv,
+                      resumeSessionId: undefined, isUndo: false, undoRollbackUuid: undefined, sdkHooks, adapter,
+                    }))
+                    return
+                  }
+
+                  if (hasExtendedContext(model) && isRateLimitError(errMsg)) {
+                    model = stripExtendedContext(model)
+                    claudeLog("upstream.context_fallback", {
+                      mode: "stream",
+                      from: model,
+                      to: model,
+                      reason: "rate_limit",
+                    })
+                    console.error(`[PROXY] ${requestMeta.requestId} rate-limited on [1m], retrying with ${model}`)
+                    yield* query(buildQueryOptions({
+                      prompt: makePrompt(), model, workingDirectory, systemContext, claudeExecutable,
+                      passthrough, stream: true, sdkAgents, passthroughMcp, cleanEnv,
+                      resumeSessionId, isUndo, undoRollbackUuid, sdkHooks, adapter,
+                    }))
+                    return
+                  }
+
+                  throw error
                 }
               })()
 
@@ -1028,145 +1019,6 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
               }
 
               const errMsg = error instanceof Error ? error.message : String(error)
-
-              // Rate-limit fallback: if using [1m] context and no content has been
-              // sent to the client yet, retry transparently with the base model.
-              if (hasExtendedContext(model) && isRateLimitError(errMsg) && !messageStartEmitted) {
-                const fallbackModel = stripExtendedContext(model)
-                claudeLog("upstream.context_fallback", {
-                  mode: "stream",
-                  from: model,
-                  to: fallbackModel,
-                  reason: "rate_limit",
-                })
-                console.error(`[PROXY] ${requestMeta.requestId} rate-limited on ${model}, retrying with ${fallbackModel}`)
-                model = fallbackModel
-
-                try {
-                  const retryResponse = query(buildQueryOptions({
-                    prompt: makePrompt(), model, workingDirectory, systemContext, claudeExecutable,
-                    passthrough, stream: true, sdkAgents, passthroughMcp, cleanEnv,
-                    resumeSessionId, isUndo, undoRollbackUuid, sdkHooks, adapter,
-                  }))
-
-                  const retryHeartbeat = setInterval(() => {
-                    try {
-                      if (!safeEnqueue(encoder.encode(`: ping\n\n`), "retry_heartbeat")) {
-                        clearInterval(retryHeartbeat)
-                      }
-                    } catch {
-                      clearInterval(retryHeartbeat)
-                    }
-                  }, 15_000)
-
-                  // Fresh state for the retry stream
-                  const retrySkipBlocks = new Set<number>()
-                  const retryStreamedToolIds = new Set<string>()
-                  let retryMessageStartEmitted = false
-                  let retrySessionId: string | undefined
-
-                  try {
-                    for await (const message of retryResponse) {
-                      if (streamClosed) break
-
-                      if ((message as any).session_id) {
-                        retrySessionId = (message as any).session_id
-                      }
-                      if (message.type === "assistant" && (message as any).uuid) {
-                        sdkUuidMap.push((message as any).uuid)
-                      }
-
-                      if (message.type === "stream_event") {
-                        streamEventsSeen += 1
-                        if (!firstChunkAt) firstChunkAt = Date.now()
-
-                        const event = message.event
-                        const eventType = (event as any).type
-                        const eventIndex = (event as any).index as number | undefined
-
-                        if (eventType === "message_start") {
-                          retrySkipBlocks.clear()
-                          if (retryMessageStartEmitted) continue
-                          retryMessageStartEmitted = true
-                        }
-                        if (eventType === "message_stop") continue
-
-                        if (eventType === "content_block_start") {
-                          const block = (event as any).content_block
-                          if (block?.type === "tool_use" && typeof block.name === "string") {
-                            if (passthrough && block.name.startsWith(PASSTHROUGH_MCP_PREFIX)) {
-                              block.name = stripMcpPrefix(block.name)
-                              if (block.id) retryStreamedToolIds.add(block.id)
-                            } else if (block.name.startsWith("mcp__")) {
-                              if (eventIndex !== undefined) retrySkipBlocks.add(eventIndex)
-                              continue
-                            }
-                          }
-                        }
-
-                        if (eventIndex !== undefined && retrySkipBlocks.has(eventIndex)) continue
-
-                        if (eventType === "message_delta") {
-                          const stopReason = (event as any).delta?.stop_reason
-                          if (stopReason === "tool_use" && retrySkipBlocks.size > 0) continue
-                        }
-
-                        const payload = encoder.encode(`event: ${eventType}\ndata: ${JSON.stringify(event)}\n\n`)
-                        if (!safeEnqueue(payload, `retry_stream_event:${eventType}`)) break
-                        eventsForwarded += 1
-
-                        if (eventType === "content_block_delta") {
-                          const delta = (event as any).delta
-                          if (delta?.type === "text_delta") textEventsForwarded += 1
-                        }
-                      }
-                    }
-                  } finally {
-                    clearInterval(retryHeartbeat)
-                  }
-
-                  claudeLog("upstream.completed", {
-                    mode: "stream",
-                    model,
-                    durationMs: Date.now() - upstreamStartAt,
-                    streamEventsSeen,
-                    eventsForwarded,
-                    textEventsForwarded,
-                    fallback: true,
-                  })
-
-                  if (retrySessionId) {
-                    storeSession(opencodeSessionId, body.messages || [], retrySessionId, workingDirectory, sdkUuidMap)
-                  }
-
-                  if (!streamClosed) {
-                    if (retryMessageStartEmitted) {
-                      safeEnqueue(encoder.encode(`event: message_stop\ndata: {"type":"message_stop"}\n\n`), "retry_final_message_stop")
-                    }
-                    try { controller.close() } catch {}
-                    streamClosed = true
-                  }
-                  return
-                } catch (retryError) {
-                  // Retry also failed — fall through to emit error
-                  claudeLog("upstream.context_fallback_failed", {
-                    mode: "stream",
-                    model,
-                    error: retryError instanceof Error ? retryError.message : String(retryError),
-                  })
-                  const retryErr = classifyError(retryError instanceof Error ? retryError.message : String(retryError))
-                  safeEnqueue(encoder.encode(`event: error\ndata: ${JSON.stringify({
-                    type: "error",
-                    error: { type: retryErr.type, message: retryErr.message }
-                  })}\n\n`), "retry_error_event")
-                  if (!streamClosed) {
-                    try { controller.close() } catch {}
-                    streamClosed = true
-                  }
-                  return
-                }
-              }
-
               claudeLog("upstream.failed", {
                 mode: "stream",
                 model,

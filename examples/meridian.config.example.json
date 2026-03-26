@@ -1,0 +1,19 @@
+{
+  "port": 4567,
+  "host": "127.0.0.1",
+  "defaultProfile": "personal",
+  "requiredApiKeys": [
+    "env:MERIDIAN_LAPTOP_KEY",
+    "env:MERIDIAN_DESKTOP_KEY"
+  ],
+  "profiles": [
+    {
+      "id": "personal",
+      "claudeConfigDir": "~/.claude"
+    },
+    {
+      "id": "company",
+      "claudeConfigDir": "~/.claude-company"
+    }
+  ]
+}

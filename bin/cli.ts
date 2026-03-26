@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 
 import { startProxyServer } from "../src/proxy/server"
+import { loadProxyConfigFile } from "../src/proxy/configLoader"
 import { exec as execCallback } from "child_process"
 import { promisify } from "util"
+import type { ProxyConfig } from "../src/proxy/types"
 
 const exec = promisify(execCallback)
 
@@ -14,9 +16,21 @@ process.on("unhandledRejection", (reason) => {
   console.error(`[PROXY] Unhandled rejection (recovered): ${reason instanceof Error ? reason.message : reason}`)
 })
 
-const port = parseInt(process.env.CLAUDE_PROXY_PORT || "3456", 10)
-const host = process.env.CLAUDE_PROXY_HOST || "127.0.0.1"
-const idleTimeoutSeconds = parseInt(process.env.CLAUDE_PROXY_IDLE_TIMEOUT_SECONDS || "120", 10)
+function getEnvConfigOverrides(env: NodeJS.ProcessEnv = process.env): Partial<ProxyConfig> {
+  const overrides: Partial<ProxyConfig> = {}
+
+  if (env.CLAUDE_PROXY_PORT) overrides.port = parseInt(env.CLAUDE_PROXY_PORT, 10)
+  if (env.CLAUDE_PROXY_HOST) overrides.host = env.CLAUDE_PROXY_HOST
+  if (env.CLAUDE_PROXY_IDLE_TIMEOUT_SECONDS) {
+    overrides.idleTimeoutSeconds = parseInt(env.CLAUDE_PROXY_IDLE_TIMEOUT_SECONDS, 10)
+  }
+  if (env.CLAUDE_PROXY_DEBUG) overrides.debug = env.CLAUDE_PROXY_DEBUG === "1"
+  if (env.CLAUDE_PROXY_API_KEYS) {
+    overrides.requiredApiKeys = env.CLAUDE_PROXY_API_KEYS.split(",").map((key) => key.trim()).filter(Boolean)
+  }
+
+  return overrides
+}
 
 export async function runCli(
   start = startProxyServer,
@@ -37,7 +51,9 @@ export async function runCli(
     console.error("\x1b[33m⚠ Could not verify Claude auth status. If requests fail, run: claude login\x1b[0m")
   }
 
-  const proxy = await start({ port, host, idleTimeoutSeconds })
+  const fileConfig = loadProxyConfigFile()
+  const envOverrides = getEnvConfigOverrides()
+  const proxy = await start({ ...fileConfig, ...envOverrides })
 
   // Handle EADDRINUSE — preserve CLI behavior of exiting on port conflict
   proxy.server.on("error", (error: NodeJS.ErrnoException) => {
@@ -48,5 +64,10 @@ export async function runCli(
 }
 
 if (import.meta.main) {
-  await runCli()
+  try {
+    await runCli()
+  } catch (error) {
+    console.error(`[PROXY] ${error instanceof Error ? error.message : String(error)}`)
+    process.exit(1)
+  }
 }

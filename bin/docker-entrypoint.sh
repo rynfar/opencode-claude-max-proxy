@@ -6,6 +6,9 @@
 CLAUDE_DIR="/home/claude/.claude"
 CLAUDE_JSON="/home/claude/.claude.json"
 CLAUDE_JSON_VOL="$CLAUDE_DIR/.claude.json"
+MERIDIAN_CONFIG_DIR="/home/claude/.config/meridian"
+
+mkdir -p "$MERIDIAN_CONFIG_DIR"
 
 # Fix ownership if volume was created as root
 if [ -d "$CLAUDE_DIR" ] && [ ! -w "$CLAUDE_DIR" ]; then

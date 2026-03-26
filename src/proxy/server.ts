@@ -25,6 +25,7 @@ import { ALLOWED_MCP_TOOLS } from "./tools"
 import { getLastUserMessage } from "./messages"
 import { openCodeAdapter } from "./adapters/opencode"
 import { buildQueryOptions, type QueryContext } from "./query"
+import { extractRequestApiKey, isApiKeyAuthEnabled, isApiKeyAuthorized } from "./auth"
 import { resolveProfile } from "./profiles"
 import {
   computeLineageHash,
@@ -132,6 +133,38 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
   const app = new Hono()
 
   app.use("*", cors())
+
+  const createApiKeyMiddleware = (requiredKeys?: string[]) => async (c: Context, next: () => Promise<void>) => {
+    if (!isApiKeyAuthEnabled(requiredKeys)) {
+      await next()
+      return
+    }
+
+    const providedApiKey = extractRequestApiKey(
+      c.req.header("x-api-key"),
+      c.req.header("authorization"),
+    )
+
+    if (!isApiKeyAuthorized(providedApiKey, requiredKeys)) {
+      return c.json(
+        {
+          type: "error",
+          error: {
+            type: "authentication_error",
+            message: "Invalid or missing API key",
+          },
+        },
+        401,
+      )
+    }
+
+    await next()
+  }
+
+  const validateApiKey = createApiKeyMiddleware(finalConfig.requiredApiKeys)
+
+  app.use("/v1/messages", validateApiKey)
+  app.use("/messages", validateApiKey)
 
   app.get("/", (c) => {
     // API clients get JSON, browsers get the landing page

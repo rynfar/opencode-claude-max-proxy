@@ -6,8 +6,18 @@ export interface ProxyConfig {
   debug: boolean
   idleTimeoutSeconds: number
   silent: boolean
+  requiredApiKeys?: string[]
   profiles?: ProfileConfig[]
   defaultProfile?: string
+}
+
+function parseRequiredApiKeys(envValue: string | undefined): string[] | undefined {
+  const keys = envValue
+    ?.split(",")
+    .map((key) => key.trim())
+    .filter(Boolean)
+
+  return keys && keys.length > 0 ? keys : undefined
 }
 
 export type ProfileType = "claude-max" | "api"
@@ -47,6 +57,7 @@ export const DEFAULT_PROXY_CONFIG: ProxyConfig = {
   debug: process.env.CLAUDE_PROXY_DEBUG === "1",
   idleTimeoutSeconds: 120,
   silent: false,
+  requiredApiKeys: parseRequiredApiKeys(process.env.CLAUDE_PROXY_API_KEYS),
   profiles: undefined,
   defaultProfile: undefined,
 }

@@ -1,4 +1,7 @@
 import { describe, expect, it } from "bun:test"
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 
 const { createProxyServer, startProxyServer } = await import("../proxy/server")
 const { resetCachedClaudeAuthStatus } = await import("../proxy/models")
@@ -91,5 +94,40 @@ describe("proxy async ops", () => {
 
     expect(startCalled).toBe(1)
     expect(errors.some((line) => line.includes("Could not verify Claude auth status"))).toBe(true)
+  })
+
+  it("loads config from a JSON file before starting the CLI proxy", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "meridian-cli-config-"))
+    const originalConfigPath = process.env.CLAUDE_PROXY_CONFIG
+    const configPath = join(tmpDir, "meridian.config.json")
+    writeFileSync(configPath, JSON.stringify({
+      port: 8123,
+      host: "0.0.0.0",
+      defaultProfile: "company",
+      requiredApiKeys: ["alpha", "beta"],
+    }))
+
+    let capturedConfig: any
+    try {
+      process.env.CLAUDE_PROXY_CONFIG = configPath
+
+      await runCli(
+        async (config) => {
+          capturedConfig = config
+          const { EventEmitter } = await import("events")
+          return { server: new EventEmitter(), config: {}, close: async () => {} } as any
+        },
+        ((async () => ({ stdout: JSON.stringify({ loggedIn: true, subscriptionType: "max" }) })) as any),
+      )
+    } finally {
+      if (originalConfigPath === undefined) delete process.env.CLAUDE_PROXY_CONFIG
+      else process.env.CLAUDE_PROXY_CONFIG = originalConfigPath
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+
+    expect(capturedConfig.port).toBe(8123)
+    expect(capturedConfig.host).toBe("0.0.0.0")
+    expect(capturedConfig.defaultProfile).toBe("company")
+    expect(capturedConfig.requiredApiKeys).toEqual(["alpha", "beta"])
   })
 })

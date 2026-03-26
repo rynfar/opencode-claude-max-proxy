@@ -18,7 +18,7 @@ FROM node:22-alpine
 
 RUN deluser --remove-home node 2>/dev/null; \
     adduser -D -u 1000 claude \
-    && mkdir -p /home/claude/.claude \
+    && mkdir -p /home/claude/.claude /home/claude/.config/meridian \
     && chown -R claude:claude /home/claude
 
 RUN npm install -g @anthropic-ai/claude-code \

@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.19.2](https://github.com/rynfar/opencode-claude-max-proxy/compare/v1.19.1...v1.19.2) (2026-03-28)
+
+
+### Bug Fixes
+
+* migrate all session store tests to setSessionStoreDir ([fc8d72b](https://github.com/rynfar/opencode-claude-max-proxy/commit/fc8d72be677a8cb4fdcb734cb8ad5b83626ce5ea))
+
 ## [1.19.1](https://github.com/rynfar/opencode-claude-max-proxy/compare/v1.19.0...v1.19.1) (2026-03-28)
 
 

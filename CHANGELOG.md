@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.20.0](https://github.com/rynfar/opencode-claude-max-proxy/compare/v1.19.4...v1.20.0) (2026-03-29)
+
+
+### Features
+
+* Droid (Factory AI) agent adapter ([#181](https://github.com/rynfar/opencode-claude-max-proxy/issues/181)) ([b07d2d4](https://github.com/rynfar/opencode-claude-max-proxy/commit/b07d2d45a12b4e1a91ed49a6df2e040c2fd3fba0))
+
 ## [1.19.4](https://github.com/rynfar/opencode-claude-max-proxy/compare/v1.19.3...v1.19.4) (2026-03-29)
 
 

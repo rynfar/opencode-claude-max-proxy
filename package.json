@@ -1,6 +1,6 @@
 {
   "name": "opencode-claude-max-proxy",
-  "version": "1.19.4",
+  "version": "1.20.0",
   "description": "Local Anthropic API powered by your Claude Max subscription. One subscription, every agent.",
   "type": "module",
   "main": "./dist/server.js",

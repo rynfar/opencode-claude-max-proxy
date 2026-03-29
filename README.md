@@ -90,6 +90,55 @@ For automatic session tracking, use a plugin like [opencode-meridian](https://gi
 }
 ```
 
+### Droid (Factory AI)
+
+Droid connects via its BYOK (Bring Your Own Key) feature. This is a one-time setup.
+
+**1. Add Meridian as a custom model provider** in `~/.factory/settings.json`:
+
+```json
+{
+  "customModels": [
+    {
+      "model": "claude-sonnet-4-6",
+      "name": "Sonnet 4.6 (1M — Claude Max)",
+      "provider": "anthropic",
+      "baseUrl": "http://127.0.0.1:3456",
+      "apiKey": "x"
+    },
+    {
+      "model": "claude-opus-4-6",
+      "name": "Opus 4.6 (1M — Claude Max)",
+      "provider": "anthropic",
+      "baseUrl": "http://127.0.0.1:3456",
+      "apiKey": "x"
+    },
+    {
+      "model": "claude-haiku-4-5-20251001",
+      "name": "Haiku 4.5 (Claude Max)",
+      "provider": "anthropic",
+      "baseUrl": "http://127.0.0.1:3456",
+      "apiKey": "x"
+    }
+  ]
+}
+```
+
+The `apiKey` value doesn't matter — Meridian authenticates through your Claude Max session.
+
+**2. In the Droid TUI**, open the model selector (`/model`) and choose any `custom:claude-*` model.
+
+**How models map to Claude Max tiers:**
+
+| Model name in config | Claude Max tier |
+|---|---|
+| `claude-sonnet-4-6` | `sonnet[1m]` — Sonnet 4.6 with 1M context |
+| `claude-opus-4-6` | `opus[1m]` — Opus 4.6 with 1M context |
+| `claude-haiku-4-5-20251001` | `haiku` — Haiku 4.5 |
+| `claude-sonnet-4-5-*` | `sonnet` — Sonnet 4.5, no extended context |
+
+> **Note:** Droid automatically uses Meridian's internal tool execution mode regardless of the global `CLAUDE_PROXY_PASSTHROUGH` setting. No extra configuration needed.
+
 ### Any Anthropic-compatible tool
 
 ```bash
@@ -103,6 +152,7 @@ export ANTHROPIC_BASE_URL=http://127.0.0.1:3456
 | Agent | Status | Plugin | Notes |
 |-------|--------|--------|-------|
 | [OpenCode](https://github.com/anomalyco/opencode) | ✅ Verified | [opencode-meridian](https://github.com/ianjwhite99/opencode-meridian) | Full tool support, session resume, streaming, subagents |
+| [Droid (Factory AI)](https://factory.ai/product/ide) | ✅ Verified | BYOK config (see setup above) | Full tool support, session resume, streaming; one-time BYOK setup |
 | [Crush](https://github.com/charmbracelet/crush) | ✅ Verified | — | Tool execution, multi-turn, headless mode |
 | [Cline](https://github.com/cline/cline) | 🔲 Untested | — | Should work — standard Anthropic API |
 | [Continue](https://github.com/continuedev/continue) | 🔲 Untested | — | Should work — standard Anthropic API |
@@ -118,7 +168,10 @@ Meridian is built as a modular proxy with clean separation of concerns:
 src/proxy/
 ├── server.ts              ← HTTP orchestration (routes, SSE streaming, concurrency)
 ├── adapter.ts             ← AgentAdapter interface (extensibility point)
-├── adapters/opencode.ts   ← OpenCode-specific behavior
+├── adapters/
+│   ├── detect.ts          ← Agent detection from request headers
+│   ├── opencode.ts        ← OpenCode adapter
+│   └── droid.ts           ← Droid (Factory AI) adapter
 ├── query.ts               ← SDK query options builder
 ├── errors.ts              ← Error classification
 ├── models.ts              ← Model mapping (sonnet/opus/haiku)
@@ -152,6 +205,7 @@ Implement the `AgentAdapter` interface in `src/proxy/adapters/`:
 
 ```typescript
 interface AgentAdapter {
+  // Required
   getSessionId(c: Context): string | undefined
   extractWorkingDirectory(body: any): string | undefined
   normalizeContent(content: any): string
@@ -159,10 +213,16 @@ interface AgentAdapter {
   getAgentIncompatibleTools(): readonly string[]
   getMcpServerName(): string
   getAllowedMcpTools(): readonly string[]
+
+  // Optional
+  buildSdkAgents?(body: any, mcpToolNames: readonly string[]): Record<string, any>
+  buildSdkHooks?(body: any, sdkAgents: Record<string, any>): any
+  buildSystemContextAddendum?(body: any, sdkAgents: Record<string, any>): string
+  usesPassthrough?(): boolean  // overrides CLAUDE_PROXY_PASSTHROUGH per-agent
 }
 ```
 
-See [`adapters/opencode.ts`](src/proxy/adapters/opencode.ts) for reference.
+Agent detection is automatic from the `User-Agent` header — `factory-cli/*` maps to the Droid adapter, everything else falls back to OpenCode. See [`adapters/detect.ts`](src/proxy/adapters/detect.ts) and [`adapters/opencode.ts`](src/proxy/adapters/opencode.ts) for reference.
 
 ## Configuration
 

@@ -24,9 +24,9 @@ const COPILOT_HEADERS = {
 }
 
 /**
- * Direct passthrough for POST /v1/responses (Responses API format).
- * Droid routes gpt-5.3-codex here when it detects a Responses API model.
- * Body is already in Responses API format — forward as-is to Copilot.
+ * Handles POST /v1/responses (Responses API format).
+ * - Codex models: passthrough to Copilot /responses
+ * - Copilot Claude models: translated to Copilot /chat/completions and back
  */
 export async function handleResponsesDirect(c: Context): Promise<Response> {
   let body: any
@@ -34,6 +34,16 @@ export async function handleResponsesDirect(c: Context): Promise<Response> {
     body = await c.req.json()
   } catch {
     return c.json({ error: { type: "invalid_request", message: "Invalid JSON body" } }, 400)
+  }
+
+  const model: string = body.model || ""
+  if (!isCopilotModel(model)) {
+    return c.json({
+      error: {
+        type: "not_found",
+        message: `Model '${model}' is not a supported Copilot model. Supported: claude-opus-4.6, claude-sonnet-4.6, gpt-5.3-codex`,
+      }
+    }, 404)
   }
 
   let jwt: { token: string; endpoint: string }
@@ -45,6 +55,19 @@ export async function handleResponsesDirect(c: Context): Promise<Response> {
   }
 
   const requestId = randomUUID()
+  if (usesResponsesEndpoint(model)) {
+    return proxyResponsesDirect(body, jwt, requestId, c)
+  }
+
+  return proxyResponsesViaChat(body, jwt, requestId, c)
+}
+
+async function proxyResponsesDirect(
+  body: any,
+  jwt: { token: string; endpoint: string },
+  requestId: string,
+  c: Context
+): Promise<Response> {
   const url = `${jwt.endpoint}/responses`
   const upstream = await fetchCopilot(url, jwt.token, requestId, body)
 
@@ -61,6 +84,77 @@ export async function handleResponsesDirect(c: Context): Promise<Response> {
   }
 
   return new Response(upstream.body, {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      "X-Request-Id": requestId,
+    },
+  })
+}
+
+async function proxyResponsesViaChat(
+  body: any,
+  jwt: { token: string; endpoint: string },
+  requestId: string,
+  c: Context
+): Promise<Response> {
+  const translatedBody = responsesToChatRequest(body)
+  const model: string = body.model || ""
+  const url = `${jwt.endpoint}/chat/completions`
+  const upstream = await fetchCopilot(url, jwt.token, requestId, translatedBody)
+
+  if (!upstream.ok) {
+    if (upstream.status === 401) clearJWTCache()
+    const errBody = await upstream.text()
+    return c.json({ error: { type: "upstream_error", message: errBody } }, upstream.status as any)
+  }
+
+  const stream = body.stream ?? true
+  if (!stream) {
+    const data = await upstream.json()
+    return c.json(chatNonStreamToResponses(data, model))
+  }
+
+  const responseStream = new ReadableStream({
+    async start(controller) {
+      const encoder = new TextEncoder()
+      const reader = upstream.body!.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ""
+      let state: ChatToResponsesStreamState = makeChatToResponsesState(model)
+
+      try {
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+
+          buffer += decoder.decode(value, { stream: true })
+          const lines = buffer.split("\n")
+          buffer = lines.pop() ?? ""
+
+          for (const line of lines) {
+            const chunks = translateChatLineToResponses(line, state)
+            for (const chunk of chunks) {
+              controller.enqueue(encoder.encode(chunk))
+            }
+          }
+        }
+        if (buffer) {
+          const chunks = translateChatLineToResponses(buffer, state)
+          for (const chunk of chunks) {
+            controller.enqueue(encoder.encode(chunk))
+          }
+        }
+        controller.enqueue(encoder.encode("data: [DONE]\n\n"))
+      } catch (err) {
+        controller.error(err)
+      } finally {
+        controller.close()
+      }
+    },
+  })
+
+  return new Response(responseStream, {
     headers: {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache",
@@ -218,6 +312,90 @@ async function proxyToResponses(
       "X-Request-Id": requestId,
     },
   })
+}
+
+// ---------------------------------------------------------------------------
+// Request translation: OpenAI Responses input → OpenAI chat messages
+// ---------------------------------------------------------------------------
+
+export function responsesToChatRequest(body: any): any {
+  const messages: any[] = []
+
+  if (typeof body.instructions === "string" && body.instructions.trim()) {
+    messages.push({ role: "system", content: body.instructions })
+  }
+
+  const input = body.input
+  const items = typeof input === "string"
+    ? [{ type: "message", role: "user", content: [{ type: "input_text", text: input }] }]
+    : Array.isArray(input)
+      ? input
+      : (input ? [input] : [])
+
+  for (const item of items) {
+    if (!item || typeof item !== "object") continue
+
+    if (item.type === "message") {
+      const rawRole = item.role ?? "user"
+      const role = rawRole === "developer" ? "system" : rawRole
+      const content = extractText(item.content)
+      messages.push({ role, content })
+      continue
+    }
+
+    if (item.type === "function_call") {
+      messages.push({
+        role: "assistant",
+        content: null,
+        tool_calls: [{
+          id: item.call_id ?? item.id ?? randomUUID(),
+          type: "function",
+          function: {
+            name: item.name ?? "",
+            arguments: item.arguments ?? "{}",
+          },
+        }],
+      })
+      continue
+    }
+
+    if (item.type === "function_call_output") {
+      messages.push({
+        role: "tool",
+        tool_call_id: item.call_id ?? item.id ?? randomUUID(),
+        content: typeof item.output === "string" ? item.output : JSON.stringify(item.output ?? ""),
+      })
+    }
+  }
+
+  if (messages.length === 0) {
+    messages.push({ role: "user", content: "" })
+  }
+
+  const translated: any = {
+    model: body.model,
+    messages,
+    stream: body.stream ?? true,
+  }
+
+  if (body.max_output_tokens !== undefined) translated.max_tokens = body.max_output_tokens
+  if (body.temperature !== undefined) translated.temperature = body.temperature
+  if (body.top_p !== undefined) translated.top_p = body.top_p
+
+  if (Array.isArray(body.tools) && body.tools.length > 0) {
+    translated.tools = body.tools.map((tool: any) => ({
+      type: "function",
+      function: {
+        name: tool.name ?? tool.function?.name,
+        description: tool.description ?? tool.function?.description,
+        parameters: tool.parameters ?? tool.function?.parameters ?? tool.input_schema ?? { type: "object", properties: {} },
+      },
+    }))
+  }
+
+  if (body.tool_choice !== undefined) translated.tool_choice = body.tool_choice
+
+  return translated
 }
 
 // ---------------------------------------------------------------------------
@@ -404,6 +582,279 @@ function responsesNonStreamToChat(data: any, model: string): any {
       total_tokens: (data.usage?.input_tokens ?? 0) + (data.usage?.output_tokens ?? 0),
     },
   }
+}
+
+// ---------------------------------------------------------------------------
+// Non-streaming response translation: OpenAI chat completion → Responses API
+// ---------------------------------------------------------------------------
+
+export function chatNonStreamToResponses(data: any, model: string): any {
+  const choice = data?.choices?.[0] ?? {}
+  const message = choice.message ?? {}
+  const usage = data?.usage ?? {}
+  const output: any[] = []
+
+  const text = typeof message.content === "string"
+    ? message.content
+    : Array.isArray(message.content)
+      ? message.content
+        .filter((part: any) => part?.type === "text")
+        .map((part: any) => part.text ?? "")
+        .join("")
+      : ""
+
+  if (text) {
+    output.push({
+      type: "message",
+      id: `msg_${randomUUID()}`,
+      role: "assistant",
+      status: "completed",
+      content: [{ type: "output_text", text, annotations: [] }],
+    })
+  }
+
+  if (Array.isArray(message.tool_calls)) {
+    for (const call of message.tool_calls) {
+      output.push({
+        type: "function_call",
+        id: call.id ?? `fc_${randomUUID()}`,
+        call_id: call.id ?? `call_${randomUUID()}`,
+        name: call.function?.name ?? "",
+        arguments: call.function?.arguments ?? "{}",
+      })
+    }
+  }
+
+  const now = Math.floor(Date.now() / 1000)
+  const stopReason = choice.finish_reason === "length"
+    ? "max_output_tokens"
+    : choice.finish_reason === "tool_calls"
+      ? "tool_calls"
+      : "stop"
+
+  return {
+    id: data?.id ?? `resp_${randomUUID()}`,
+    object: "response",
+    created_at: now,
+    status: "completed",
+    model,
+    output,
+    output_text: text || null,
+    parallel_tool_calls: Array.isArray(message.tool_calls) && message.tool_calls.length > 1,
+    stop_reason: stopReason,
+    usage: {
+      input_tokens: usage.prompt_tokens ?? 0,
+      output_tokens: usage.completion_tokens ?? 0,
+      total_tokens: usage.total_tokens ?? ((usage.prompt_tokens ?? 0) + (usage.completion_tokens ?? 0)),
+    },
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Streaming SSE translation: Responses events → OpenAI chat SSE chunks
+// ---------------------------------------------------------------------------
+
+interface ChatToResponsesToolState {
+  outputIndex: number
+  itemId: string
+  callId: string
+  name: string
+  arguments: string
+}
+
+interface ChatToResponsesStreamState {
+  id: string
+  model: string
+  createdAt: number
+  started: boolean
+  completed: boolean
+  nextOutputIndex: number
+  messageOutputIndex: number | null
+  messageItemId: string
+  messageText: string
+  toolByIndex: Map<number, ChatToResponsesToolState>
+  usage: { input_tokens: number; output_tokens: number; total_tokens: number } | null
+}
+
+function makeChatToResponsesState(model: string): ChatToResponsesStreamState {
+  return {
+    id: `resp_${randomUUID()}`,
+    model,
+    createdAt: Math.floor(Date.now() / 1000),
+    started: false,
+    completed: false,
+    nextOutputIndex: 0,
+    messageOutputIndex: null,
+    messageItemId: `msg_${randomUUID()}`,
+    messageText: "",
+    toolByIndex: new Map(),
+    usage: null,
+  }
+}
+
+function makeResponsesSSEChunk(payload: any): string {
+  return `data: ${JSON.stringify(payload)}\n\n`
+}
+
+function ensureChatResponsesCreated(state: ChatToResponsesStreamState, out: string[]): void {
+  if (state.started) return
+  state.started = true
+  out.push(makeResponsesSSEChunk({
+    type: "response.created",
+    response: {
+      id: state.id,
+      object: "response",
+      created_at: state.createdAt,
+      model: state.model,
+      status: "in_progress",
+      output: [],
+    },
+  }))
+}
+
+function finishReasonChatToResponses(reason: string | null | undefined): string {
+  if (reason === "length") return "max_output_tokens"
+  if (reason === "tool_calls") return "tool_calls"
+  return "stop"
+}
+
+function translateChatLineToResponses(line: string, state: ChatToResponsesStreamState): string[] {
+  if (!line.startsWith("data: ")) return []
+  const raw = line.slice(6).trim()
+  if (!raw || raw === "[DONE]") return []
+
+  let payload: any
+  try {
+    payload = JSON.parse(raw)
+  } catch {
+    return []
+  }
+
+  const out: string[] = []
+
+  state.id = payload.id ?? state.id
+  state.model = payload.model ?? state.model
+
+  const choices: any[] = Array.isArray(payload.choices) ? payload.choices : []
+  if (choices.length === 0) return out
+
+  ensureChatResponsesCreated(state, out)
+
+  for (const choice of choices) {
+    const delta = choice.delta ?? {}
+
+    if (typeof delta.content === "string" && delta.content.length > 0) {
+      if (state.messageOutputIndex === null) {
+        state.messageOutputIndex = state.nextOutputIndex++
+      }
+      state.messageText += delta.content
+      out.push(makeResponsesSSEChunk({
+        type: "response.output_text.delta",
+        output_index: state.messageOutputIndex,
+        item_id: state.messageItemId,
+        content_index: 0,
+        delta: delta.content,
+      }))
+    }
+
+    if (Array.isArray(delta.tool_calls)) {
+      for (const toolDelta of delta.tool_calls) {
+        const index: number = toolDelta.index ?? 0
+        let tool = state.toolByIndex.get(index)
+        if (!tool) {
+          tool = {
+            outputIndex: state.nextOutputIndex++,
+            itemId: `fc_${randomUUID()}`,
+            callId: toolDelta.id ?? `call_${randomUUID()}`,
+            name: toolDelta.function?.name ?? "",
+            arguments: "",
+          }
+          state.toolByIndex.set(index, tool)
+          out.push(makeResponsesSSEChunk({
+            type: "response.output_item.added",
+            output_index: tool.outputIndex,
+            item: {
+              type: "function_call",
+              id: tool.itemId,
+              call_id: tool.callId,
+              name: tool.name,
+              arguments: "",
+            },
+          }))
+        }
+
+        if (toolDelta.function?.name && !tool.name) {
+          tool.name = toolDelta.function.name
+        }
+
+        const argDelta = toolDelta.function?.arguments
+        if (typeof argDelta === "string" && argDelta.length > 0) {
+          tool.arguments += argDelta
+          out.push(makeResponsesSSEChunk({
+            type: "response.function_call_arguments.delta",
+            item_id: tool.itemId,
+            output_index: tool.outputIndex,
+            delta: argDelta,
+          }))
+        }
+      }
+    }
+
+    if (choice.finish_reason !== null && choice.finish_reason !== undefined && !state.completed) {
+      state.completed = true
+      const usage = payload.usage
+      if (usage) {
+        state.usage = {
+          input_tokens: usage.prompt_tokens ?? 0,
+          output_tokens: usage.completion_tokens ?? 0,
+          total_tokens: usage.total_tokens ?? ((usage.prompt_tokens ?? 0) + (usage.completion_tokens ?? 0)),
+        }
+      }
+
+      const outputItems: Array<{ index: number; value: any }> = []
+      if (state.messageOutputIndex !== null) {
+        outputItems.push({
+          index: state.messageOutputIndex,
+          value: {
+            type: "message",
+            id: state.messageItemId,
+            role: "assistant",
+            status: "completed",
+            content: [{ type: "output_text", text: state.messageText, annotations: [] }],
+          },
+        })
+      }
+      for (const tool of state.toolByIndex.values()) {
+        outputItems.push({
+          index: tool.outputIndex,
+          value: {
+            type: "function_call",
+            id: tool.itemId,
+            call_id: tool.callId,
+            name: tool.name,
+            arguments: tool.arguments,
+          },
+        })
+      }
+      outputItems.sort((a, b) => a.index - b.index)
+
+      out.push(makeResponsesSSEChunk({
+        type: "response.completed",
+        response: {
+          id: state.id,
+          object: "response",
+          created_at: state.createdAt,
+          model: state.model,
+          status: "completed",
+          stop_reason: finishReasonChatToResponses(choice.finish_reason),
+          output: outputItems.map((item) => item.value),
+          usage: state.usage ?? { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+        },
+      }))
+    }
+  }
+
+  return out
 }
 
 // ---------------------------------------------------------------------------

@@ -1,8 +1,40 @@
 #!/usr/bin/env node
 
+import { createRequire } from "module"
 import { startProxyServer } from "../src/proxy/server"
 import { exec as execCallback } from "child_process"
 import { promisify } from "util"
+
+const require = createRequire(import.meta.url)
+const { version } = require("../package.json")
+
+const args = process.argv.slice(2)
+
+if (args.includes("--version") || args.includes("-v")) {
+  console.log(version)
+  process.exit(0)
+}
+
+if (args.includes("--help") || args.includes("-h")) {
+  console.log(`meridian v${version}
+
+Local Anthropic API powered by your Claude Max subscription.
+
+Usage: meridian [options]
+
+Options:
+  -v, --version   Show version
+  -h, --help      Show this help
+
+Environment variables:
+  MERIDIAN_PORT                     Port to listen on (default: 3456)
+  MERIDIAN_HOST                     Host to bind to (default: 127.0.0.1)
+  MERIDIAN_PASSTHROUGH              Enable passthrough mode (tools forwarded to client)
+  MERIDIAN_IDLE_TIMEOUT_SECONDS     Idle timeout in seconds (default: 120)
+
+See https://github.com/rynfar/meridian for full documentation.`)
+  process.exit(0)
+}
 
 const exec = promisify(execCallback)
 
@@ -14,9 +46,9 @@ process.on("unhandledRejection", (reason) => {
   console.error(`[PROXY] Unhandled rejection (recovered): ${reason instanceof Error ? reason.message : reason}`)
 })
 
-const port = parseInt(process.env.CLAUDE_PROXY_PORT || "3456", 10)
-const host = process.env.CLAUDE_PROXY_HOST || "127.0.0.1"
-const idleTimeoutSeconds = parseInt(process.env.CLAUDE_PROXY_IDLE_TIMEOUT_SECONDS || "120", 10)
+const port = parseInt(process.env.MERIDIAN_PORT ?? process.env.CLAUDE_PROXY_PORT ?? "3456", 10)
+const host = process.env.MERIDIAN_HOST ?? process.env.CLAUDE_PROXY_HOST ?? "127.0.0.1"
+const idleTimeoutSeconds = parseInt(process.env.MERIDIAN_IDLE_TIMEOUT_SECONDS ?? process.env.CLAUDE_PROXY_IDLE_TIMEOUT_SECONDS ?? "120", 10)
 
 export async function runCli(
   start = startProxyServer,

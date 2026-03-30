@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.22.1](https://github.com/rynfar/meridian/compare/v1.22.0...v1.22.1) (2026-03-30)
+
+
+### Bug Fixes
+
+* add --version and --help flags to CLI ([#196](https://github.com/rynfar/meridian/issues/196)) ([029d049](https://github.com/rynfar/meridian/commit/029d04936cead82fd845d048fcd3dfb2b286c181))
+
 ## [1.22.0](https://github.com/rynfar/meridian/compare/v1.21.1...v1.22.0) (2026-03-30)
 
 

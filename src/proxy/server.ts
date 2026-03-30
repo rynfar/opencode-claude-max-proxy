@@ -22,6 +22,7 @@ import { mapModelToClaudeModel, resolveClaudeExecutableAsync, isClosedController
 import { getLastUserMessage } from "./messages"
 import { detectAdapter } from "./adapters/detect"
 import { buildQueryOptions, type QueryContext } from "./query"
+import { createFileChangeHook, extractFileChangesFromMessages, formatFileChangeSummary, type FileChange } from "./fileChanges"
 import {
   computeLineageHash,
   hashMessage,
@@ -396,6 +397,7 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
         ? adapterPassthrough
         : Boolean((process.env.MERIDIAN_PASSTHROUGH ?? process.env.CLAUDE_PROXY_PASSTHROUGH))
       const capturedToolUses: Array<{ id: string; name: string; input: any }> = []
+      const fileChanges: FileChange[] = []
 
       // In passthrough mode, register OpenCode's tools as MCP tools so Claude
       // can actually call them (not just see them as text descriptions).
@@ -408,6 +410,11 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
 
       // In passthrough mode: block ALL tools, capture them for forwarding (agent-agnostic).
       // In normal mode: delegate hook construction to the adapter.
+      // PostToolUse hook tracks file changes from MCP tools (internal mode only).
+      // Catches write, edit, AND bash redirects (>, >>, tee, sed -i).
+      const mcpPrefix = `mcp__${adapter.getMcpServerName()}__`
+      const fileChangeHook = createFileChangeHook(fileChanges, mcpPrefix)
+
       const sdkHooks = passthrough
         ? {
             PreToolUse: [{
@@ -425,9 +432,10 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
               }],
             }],
           }
-        : adapter.buildSdkHooks?.(body, sdkAgents) ?? undefined
-
-
+        : {
+            ...(adapter.buildSdkHooks?.(body, sdkAgents) ?? {}),
+            PostToolUse: [fileChangeHook],
+          }
 
         if (!stream) {
           const contentBlocks: Array<Record<string, unknown>> = []
@@ -566,7 +574,7 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
 
                 // Preserve ALL content blocks (text, tool_use, thinking, etc.)
                 for (const block of message.message.content) {
-                  const b = block as Record<string, unknown>
+                  const b = block as unknown as Record<string, unknown>
                   // In passthrough mode, strip MCP prefix from tool names
                   if (passthrough && b.type === "tool_use" && typeof b.name === "string") {
                     b.name = stripMcpPrefix(b.name as string)
@@ -611,6 +619,27 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
           // Determine stop_reason based on content: tool_use if any tool blocks, else end_turn
           const hasToolUse = contentBlocks.some((b) => b.type === "tool_use")
           const stopReason = hasToolUse ? "tool_use" : "end_turn"
+
+          // Append file change summary:
+          // - Internal mode: fileChanges populated by PostToolUse hook
+          // - Passthrough mode: scan body.messages for executed tool_use blocks
+          if (passthrough && stopReason === "end_turn" && adapter.extractFileChangesFromToolUse) {
+            const passthroughChanges = extractFileChangesFromMessages(
+              body.messages || [],
+              adapter.extractFileChangesFromToolUse.bind(adapter)
+            )
+            fileChanges.push(...passthroughChanges)
+          }
+          const fileChangeSummary = formatFileChangeSummary(fileChanges)
+          if (fileChangeSummary) {
+            const lastTextBlock = [...contentBlocks].reverse().find((b) => b.type === "text")
+            if (lastTextBlock) {
+              lastTextBlock.text = (lastTextBlock.text as string) + fileChangeSummary
+            } else {
+              contentBlocks.push({ type: "text", text: fileChangeSummary.trimStart() })
+            }
+            claudeLog("response.file_changes", { mode: "non_stream", count: fileChanges.length })
+          }
 
           // If no content at all, add a fallback text block
           if (contentBlocks.length === 0) {
@@ -1006,6 +1035,42 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
                       usage: { output_tokens: 0 }
                     })}\n\n`
                   ), "passthrough_message_delta")
+                }
+
+                // Passthrough mode: scan body.messages for file changes on end_turn
+                if (passthrough && adapter.extractFileChangesFromToolUse) {
+                  const passthroughChanges = extractFileChangesFromMessages(
+                    body.messages || [],
+                    adapter.extractFileChangesFromToolUse.bind(adapter)
+                  )
+                  fileChanges.push(...passthroughChanges)
+                }
+
+                // Emit file change summary as a text block before closing
+                const streamFileChangeSummary = formatFileChangeSummary(fileChanges)
+                if (streamFileChangeSummary && messageStartEmitted) {
+                  const fcBlockIndex = nextClientBlockIndex++
+                  safeEnqueue(encoder.encode(
+                    `event: content_block_start\ndata: ${JSON.stringify({
+                      type: "content_block_start",
+                      index: fcBlockIndex,
+                      content_block: { type: "text", text: "" },
+                    })}\n\n`
+                  ), "file_changes_block_start")
+                  safeEnqueue(encoder.encode(
+                    `event: content_block_delta\ndata: ${JSON.stringify({
+                      type: "content_block_delta",
+                      index: fcBlockIndex,
+                      delta: { type: "text_delta", text: streamFileChangeSummary },
+                    })}\n\n`
+                  ), "file_changes_text_delta")
+                  safeEnqueue(encoder.encode(
+                    `event: content_block_stop\ndata: ${JSON.stringify({
+                      type: "content_block_stop",
+                      index: fcBlockIndex,
+                    })}\n\n`
+                  ), "file_changes_block_stop")
+                  claudeLog("response.file_changes", { mode: "stream", count: fileChanges.length })
                 }
 
                 // Emit the final message_stop (we skipped all intermediate ones)

@@ -55,6 +55,7 @@ src/
 │   ├── agentDefs.ts           ← Subagent definition extraction from tool descriptions
 │   ├── agentMatch.ts          ← Fuzzy agent name matching
 │   └── passthroughTools.ts    ← Tool forwarding mode (agent handles execution)
+├── fileChanges.ts             ← PostToolUse hook: tracks write/edit ops, formats summary
 ├── mcpTools.ts                ← MCP tool definitions (read, write, edit, bash, glob, grep)
 ├── logger.ts                  ← Logging with AsyncLocalStorage context
 ├── utils/
@@ -89,6 +90,7 @@ server.ts (HTTP layer)
     │                    ──► sessionStore.ts
     ├── agentDefs.ts
     ├── agentMatch.ts
+    ├── fileChanges.ts
     ├── passthroughTools.ts
     ├── mcpTools.ts
     └── telemetry/

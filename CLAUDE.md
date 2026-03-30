@@ -59,6 +59,7 @@ errors.ts          → classifyError (pure)
 models.ts          → mapModelToClaudeModel, resolveClaudeExecutableAsync
 tools.ts           → BLOCKED_BUILTIN_TOOLS, CLAUDE_CODE_ONLY_TOOLS, MCP_SERVER_NAME
 messages.ts        → normalizeContent, getLastUserMessage (pure)
+fileChanges.ts     → PostToolUse hook: file write/edit tracking + summary formatting (pure)
 session/
   lineage.ts       → Hashing, lineage verification (PURE — no I/O)
   fingerprint.ts   → extractClientCwd, getConversationFingerprint

@@ -69,6 +69,12 @@ kill $(lsof -ti :3456)
 | CL6 | [Cline: Session Continuation](#cl6-cline-session-continuation) | `-T taskId` resumes session; `lineage=continuation` in proxy log | 2026-03-29 |
 | CL7 | [Cline: Model Routing](#cl7-cline-model-routing) | sonnet-4-6→sonnet[1m], opus-4-6→opus[1m], haiku→haiku | 2026-03-29 |
 | CL8 | [Cline: Multi-Agent Coexistence](#cl8-cline-multi-agent-coexistence) | Cline + Crush + OpenCode on same port simultaneously | 2026-03-29 |
+| FC1 | [File Changes: Write (non-stream)](#fc1-file-changes-write-non-stream) | PostToolUse hook tracks write, appends "Files changed" to non-stream response | 2026-03-30 |
+| FC2 | [File Changes: Write (stream)](#fc2-file-changes-write-stream) | PostToolUse hook tracks write, emits file change text block in SSE stream | 2026-03-30 |
+| FC3 | [File Changes: Edit](#fc3-file-changes-edit) | Edit operations tracked as "edited" in summary | 2026-03-30 |
+| FC4 | [File Changes: Read-only (no summary)](#fc4-file-changes-read-only-no-summary) | Read-only operations produce no "Files changed" section | 2026-03-30 |
+| FC5 | [File Changes: Multiple ops](#fc5-file-changes-multiple-ops) | Multiple writes + edits listed in a single summary | 2026-03-30 |
+| FC6 | [File Changes: Multiple ops (stream)](#fc6-file-changes-multiple-ops-stream) | Multiple file changes emitted as a text block in SSE stream | 2026-03-30 |
 
 ---
 
@@ -908,6 +914,7 @@ Which proxy modules each E2E test exercises:
 | `agentMatch.ts` | E19 (fuzzy matching in PreToolUse hook) |
 | `passthroughTools.ts` | E17 |
 | `mcpTools.ts` | E3, E10 |
+| `fileChanges.ts` | FC1, FC2, FC3, FC4, FC5, FC6 |
 | `telemetry/` | E11 |
 
 ---
@@ -1720,3 +1727,234 @@ curl -s http://127.0.0.1:3456/v1/messages \
 - All three respond correctly
 - No cross-contamination between sessions
 - Proxy handles all three without errors
+
+---
+
+## File Change Visibility Tests
+
+These tests verify the PostToolUse hook that tracks file write/edit operations and appends a "Files changed" summary to responses. This feature is **internal mode only** — passthrough mode forwards tools to the client, so the proxy never sees tool execution results.
+
+**Requires:** Proxy running in internal mode (no `MERIDIAN_PASSTHROUGH` env var). Use a separate port if your default service runs in passthrough mode.
+
+```bash
+kill $(lsof -ti :3457) 2>/dev/null; sleep 1
+CLAUDE_PROXY_PORT=3457 bun run ./bin/cli.ts > /tmp/proxy-fc-e2e.log 2>&1 &
+sleep 5
+curl -s http://127.0.0.1:3457/health | python3 -m json.tool
+# → mode: "internal"
+```
+
+---
+
+## FC1: File Changes Write (non-stream)
+
+**Verifies:** PostToolUse hook captures a write operation and appends "Files changed" summary to non-streaming response.
+
+```bash
+rm -f /tmp/e2e-fc-write.txt
+
+curl -s http://127.0.0.1:3457/v1/messages \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: dummy" \
+  -H "x-opencode-session: e2e-fc-write-001" \
+  -d '{
+    "model": "claude-sonnet-4-5-20250514",
+    "max_tokens": 300,
+    "stream": false,
+    "messages": [{"role": "user", "content": "Write the text FILECHANGE_OK to /tmp/e2e-fc-write.txt. Just write it, nothing else."}]
+  }' | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+texts = [b['text'] for b in d['content'] if b['type'] == 'text']
+full = '\n'.join(texts)
+print(full)
+"
+
+cat /tmp/e2e-fc-write.txt   # → FILECHANGE_OK
+rm /tmp/e2e-fc-write.txt
+```
+
+**Pass criteria:**
+- File `/tmp/e2e-fc-write.txt` exists on disk with content `FILECHANGE_OK`
+- Response text includes `Files changed:` followed by `- wrote /tmp/e2e-fc-write.txt`
+- `"type": "message"` in response (valid Anthropic format)
+
+---
+
+## FC2: File Changes Write (stream)
+
+**Verifies:** PostToolUse hook captures a write operation and emits a file change text block in the SSE stream, before `message_stop`.
+
+```bash
+rm -f /tmp/e2e-fc-stream.txt
+
+curl -sN http://127.0.0.1:3457/v1/messages \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: dummy" \
+  -H "x-opencode-session: e2e-fc-stream-001" \
+  -d '{
+    "model": "claude-sonnet-4-5-20250514",
+    "max_tokens": 300,
+    "stream": true,
+    "messages": [{"role": "user", "content": "Write the text STREAMFC_OK to /tmp/e2e-fc-stream.txt. Just write it."}]
+  }' | tee /tmp/fc-stream-raw.txt | grep -E "text_delta.*Files changed"
+
+cat /tmp/e2e-fc-stream.txt   # → STREAMFC_OK
+rm -f /tmp/e2e-fc-stream.txt /tmp/fc-stream-raw.txt
+```
+
+**Pass criteria:**
+- File exists on disk with `STREAMFC_OK`
+- SSE stream contains a `text_delta` event with `Files changed:\n- wrote /tmp/e2e-fc-stream.txt`
+- The file change block comes BEFORE `message_stop` in the event stream
+- Block index is monotonically increasing (no index collision)
+
+---
+
+## FC3: File Changes Edit
+
+**Verifies:** Edit operations are tracked as "edited" (not "wrote") in the file change summary.
+
+```bash
+echo "function greet() { return 'hello' }" > /tmp/e2e-fc-edit.js
+
+curl -s http://127.0.0.1:3457/v1/messages \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: dummy" \
+  -H "x-opencode-session: e2e-fc-edit-001" \
+  -d '{
+    "model": "claude-sonnet-4-5-20250514",
+    "max_tokens": 300,
+    "stream": false,
+    "messages": [{"role": "user", "content": "Edit /tmp/e2e-fc-edit.js to change hello to world. Do not rewrite the whole file, just edit it."}]
+  }' | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+texts = [b['text'] for b in d['content'] if b['type'] == 'text']
+print('\n'.join(texts))
+"
+
+cat /tmp/e2e-fc-edit.js   # → function greet() { return 'world' }
+rm /tmp/e2e-fc-edit.js
+```
+
+**Pass criteria:**
+- File on disk contains `'world'` instead of `'hello'`
+- Response text includes `Files changed:` followed by `- edited /tmp/e2e-fc-edit.js`
+- Not `- wrote` — the operation must be `edited`
+
+---
+
+## FC4: File Changes Read-only (no summary)
+
+**Verifies:** Read-only tool operations (read, glob, grep) do NOT produce a "Files changed" section in the response.
+
+```bash
+echo "READ_ONLY_CONTENT" > /tmp/e2e-fc-readonly.txt
+
+curl -s http://127.0.0.1:3457/v1/messages \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: dummy" \
+  -H "x-opencode-session: e2e-fc-readonly-001" \
+  -d '{
+    "model": "claude-sonnet-4-5-20250514",
+    "max_tokens": 200,
+    "stream": false,
+    "messages": [{"role": "user", "content": "Read the file /tmp/e2e-fc-readonly.txt and tell me what it contains. Do not modify it."}]
+  }' | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+texts = [b['text'] for b in d['content'] if b['type'] == 'text']
+full = '\n'.join(texts)
+has_fc = 'Files changed' in full
+print(f'Contains Files changed: {has_fc} (should be False)')
+print(f'Contains READ_ONLY_CONTENT: {\"READ_ONLY_CONTENT\" in full}')
+"
+
+rm /tmp/e2e-fc-readonly.txt
+```
+
+**Pass criteria:**
+- Response text includes `READ_ONLY_CONTENT` (file was read)
+- Response text does NOT contain `Files changed:` — no write/edit occurred
+- No extra text block appended
+
+---
+
+## FC5: File Changes Multiple ops
+
+**Verifies:** Multiple file operations (write + edit) within one turn are all tracked and listed in the summary.
+
+```bash
+rm -f /tmp/e2e-fc-multi-a.txt
+echo "original content" > /tmp/e2e-fc-multi-b.txt
+
+curl -s http://127.0.0.1:3457/v1/messages \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: dummy" \
+  -H "x-opencode-session: e2e-fc-multi-001" \
+  -d '{
+    "model": "claude-sonnet-4-5-20250514",
+    "max_tokens": 400,
+    "stream": false,
+    "messages": [{"role": "user", "content": "Do two things: 1) Write MULTI_A to /tmp/e2e-fc-multi-a.txt. 2) Edit /tmp/e2e-fc-multi-b.txt to change \"original\" to \"modified\". Do both."}]
+  }' | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+texts = [b['text'] for b in d['content'] if b['type'] == 'text']
+full = '\n'.join(texts)
+idx = full.find('Files changed:')
+if idx >= 0:
+    print(full[idx:])
+else:
+    print('NO FILES CHANGED SECTION FOUND')
+"
+
+cat /tmp/e2e-fc-multi-a.txt   # → MULTI_A
+cat /tmp/e2e-fc-multi-b.txt   # → modified content
+rm -f /tmp/e2e-fc-multi-a.txt /tmp/e2e-fc-multi-b.txt
+```
+
+**Pass criteria:**
+- Both files modified on disk
+- Summary includes both: `- wrote /tmp/e2e-fc-multi-a.txt` and `- edited /tmp/e2e-fc-multi-b.txt`
+- Deduplication works — each path+operation listed once even if the model called the tool multiple times
+
+---
+
+## FC6: File Changes Multiple ops (stream)
+
+**Verifies:** Multiple file changes in streaming mode are emitted as a single text block before `message_stop`.
+
+```bash
+rm -f /tmp/e2e-fc-stream-multi-a.txt /tmp/e2e-fc-stream-multi-b.txt
+
+curl -sN http://127.0.0.1:3457/v1/messages \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: dummy" \
+  -H "x-opencode-session: e2e-fc-stream-multi-001" \
+  -d '{
+    "model": "claude-sonnet-4-5-20250514",
+    "max_tokens": 400,
+    "stream": true,
+    "messages": [{"role": "user", "content": "Write FOO to /tmp/e2e-fc-stream-multi-a.txt and BAR to /tmp/e2e-fc-stream-multi-b.txt"}]
+  }' | grep "text_delta" | grep "Files changed"
+
+cat /tmp/e2e-fc-stream-multi-a.txt   # → FOO
+cat /tmp/e2e-fc-stream-multi-b.txt   # → BAR
+rm -f /tmp/e2e-fc-stream-multi-a.txt /tmp/e2e-fc-stream-multi-b.txt
+```
+
+**Pass criteria:**
+- Both files exist on disk with correct content
+- A `text_delta` event contains `Files changed:\n- wrote /tmp/e2e-fc-stream-multi-a.txt\n- wrote /tmp/e2e-fc-stream-multi-b.txt`
+- Only one file change text block (not one per file)
+
+---
+
+## FC Cleanup
+
+```bash
+kill $(lsof -ti :3457) 2>/dev/null
+rm -f /tmp/proxy-fc-e2e.log
+```

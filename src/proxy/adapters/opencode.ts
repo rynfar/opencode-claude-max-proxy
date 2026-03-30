@@ -7,6 +7,7 @@
 
 import type { Context } from "hono"
 import type { AgentAdapter } from "../adapter"
+import { type FileChange, extractFileChangesFromBash } from "../fileChanges"
 import { normalizeContent } from "../messages"
 import { extractClientCwd } from "../session/fingerprint"
 import { BLOCKED_BUILTIN_TOOLS, CLAUDE_CODE_ONLY_TOOLS, MCP_SERVER_NAME, ALLOWED_MCP_TOOLS } from "../tools"
@@ -89,5 +90,29 @@ export const openCodeAdapter: AgentAdapter = {
     const validAgentNames = Object.keys(sdkAgents)
     if (validAgentNames.length === 0) return ""
     return `\n\nIMPORTANT: When using the task/Task tool, the subagent_type parameter must be one of these exact values (case-sensitive, lowercase): ${validAgentNames.join(", ")}. Do NOT capitalize or modify these names.`
+  },
+
+  /**
+   * NOTE: OpenCode-specific. Maps OpenCode's tool names to file changes.
+   * OpenCode uses lowercase tool names (write, edit, multiedit) with filePath input.
+   * The passthrough proxy may also return PascalCase names (Write, Edit, MultiEdit)
+   * from the SDK's tool registration, so we match both.
+   * Bash commands are parsed for output redirects (>, >>), tee, and sed -i.
+   */
+  extractFileChangesFromToolUse(toolName: string, toolInput: unknown): FileChange[] {
+    const input = toolInput as Record<string, unknown> | null | undefined
+    const filePath = input?.filePath ?? input?.file_path
+
+    const lowerName = toolName.toLowerCase()
+    if (lowerName === "write" && filePath) {
+      return [{ operation: "wrote", path: String(filePath) }]
+    }
+    if ((lowerName === "edit" || lowerName === "multiedit") && filePath) {
+      return [{ operation: "edited", path: String(filePath) }]
+    }
+    if (lowerName === "bash" && input?.command) {
+      return extractFileChangesFromBash(String(input.command))
+    }
+    return []
   },
 }

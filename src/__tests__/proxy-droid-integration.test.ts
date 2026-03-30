@@ -184,8 +184,9 @@ describe("Droid adapter: no subagent routing", () => {
     const app = createTestApp()
     const body = { ...DROID_BODY, tools: [TASK_TOOL] }
     await (await post(app, body, { "User-Agent": DROID_UA })).json()
-    // No hooks because droid.buildSdkHooks returns undefined
-    expect(capturedQueryParams.options.hooks).toBeUndefined()
+    // No PreToolUse hooks because droid.buildSdkHooks returns undefined
+    // PostToolUse may be present (file change tracking is adapter-agnostic)
+    expect(capturedQueryParams.options.hooks?.PreToolUse).toBeUndefined()
   })
 
   it("OpenCode still gets Task PreToolUse hooks when Task tool present", async () => {

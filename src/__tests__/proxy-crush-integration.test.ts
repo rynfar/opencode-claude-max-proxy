@@ -251,8 +251,9 @@ describe("Crush adapter: no subagent routing", () => {
   it("no PreToolUse hooks for Crush requests", async () => {
     const app = createTestApp()
     await (await post(app, CRUSH_BODY, { "User-Agent": CRUSH_UA })).json()
-    // crushAdapter.buildSdkHooks returns undefined → no hooks in non-passthrough mode
-    expect(capturedQueryParams.options.hooks).toBeUndefined()
+    // crushAdapter.buildSdkHooks returns undefined → no PreToolUse in non-passthrough mode
+    // PostToolUse may be present (file change tracking is adapter-agnostic)
+    expect(capturedQueryParams.options.hooks?.PreToolUse).toBeUndefined()
   })
 })
 

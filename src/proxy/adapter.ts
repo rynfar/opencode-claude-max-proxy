@@ -87,4 +87,22 @@ export interface AgentAdapter {
    * When defined, takes precedence over the env var for this agent.
    */
   usesPassthrough?(): boolean
+
+  /**
+   * Map a client-side tool_use block to file changes (passthrough mode).
+   *
+   * In passthrough mode the SDK doesn't execute tools, so PostToolUse
+   * hooks never fire. Instead, the proxy scans the conversation history
+   * in body.messages for assistant tool_use blocks and uses this method
+   * to identify file-writing operations.
+   *
+   * Returns an array of FileChange entries. Most tools produce 0 or 1 entry,
+   * but bash commands can produce multiple (e.g., `echo a > x && echo b > y`).
+   *
+   * Each adapter knows its agent's tool naming convention:
+   * - OpenCode: "write" / "edit" / "bash" (with redirect parsing)
+   * - Crush: "write" / "edit" / "bash"
+   * - Cline: "write_to_file" / "apply_diff"
+   */
+  extractFileChangesFromToolUse?(toolName: string, toolInput: unknown): import("./fileChanges").FileChange[]
 }

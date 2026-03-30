@@ -20,6 +20,7 @@
 
 import type { Context } from "hono"
 import type { AgentAdapter } from "../adapter"
+import { type FileChange, extractFileChangesFromBash } from "../fileChanges"
 import { normalizeContent } from "../messages"
 import { BLOCKED_BUILTIN_TOOLS, CLAUDE_CODE_ONLY_TOOLS } from "../tools"
 
@@ -100,4 +101,24 @@ export const crushAdapter: AgentAdapter = {
    * passthrough=1 setting that serves OpenCode also serves Crush correctly.
    */
   // usesPassthrough not defined — defers to CLAUDE_PROXY_PASSTHROUGH env var
+
+  /**
+   * Crush uses lowercase tool names: write, edit, patch, bash.
+   * Input path field is "file_path".
+   */
+  extractFileChangesFromToolUse(toolName: string, toolInput: unknown): FileChange[] {
+    const input = toolInput as Record<string, unknown> | null | undefined
+    const filePath = input?.file_path ?? input?.path
+
+    if (toolName === "write" && filePath) {
+      return [{ operation: "wrote", path: String(filePath) }]
+    }
+    if ((toolName === "edit" || toolName === "patch") && filePath) {
+      return [{ operation: "edited", path: String(filePath) }]
+    }
+    if (toolName === "bash" && input?.command) {
+      return extractFileChangesFromBash(String(input.command))
+    }
+    return []
+  },
 }

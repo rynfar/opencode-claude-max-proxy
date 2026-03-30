@@ -43,12 +43,18 @@ describe("buildQueryOptions", () => {
     expect(result.options.maxTurns).toBe(1)
   })
 
-  it("includes system prompt when provided", () => {
+  it("includes system prompt as preset in normal mode", () => {
     const result = buildQueryOptions(makeContext({ systemContext: "Be helpful" }))
     const sp = (result.options as any).systemPrompt
     expect(sp).toBeDefined()
     expect(sp.type).toBe("preset")
     expect(sp.append).toBe("Be helpful")
+  })
+
+  it("uses raw system prompt in passthrough mode", () => {
+    const result = buildQueryOptions(makeContext({ passthrough: true, systemContext: "Be helpful" }))
+    const sp = (result.options as any).systemPrompt
+    expect(sp).toBe("Be helpful")
   })
 
   it("omits system prompt when empty", () => {
@@ -121,6 +127,18 @@ describe("buildQueryOptions", () => {
     const env = (result.options as any).env
     expect(env.HOME).toBe("/home/user")
     expect(env.ENABLE_TOOL_SEARCH).toBe("false")
+  })
+
+  it("disables Claude.ai MCP servers in passthrough mode", () => {
+    const result = buildQueryOptions(makeContext({ passthrough: true }))
+    const env = (result.options as any).env
+    expect(env.ENABLE_CLAUDEAI_MCP_SERVERS).toBe("false")
+  })
+
+  it("does not disable Claude.ai MCP servers in normal mode", () => {
+    const result = buildQueryOptions(makeContext({ passthrough: false }))
+    const env = (result.options as any).env
+    expect(env.ENABLE_CLAUDEAI_MCP_SERVERS).toBeUndefined()
   })
 
   it("includes hooks when provided", () => {

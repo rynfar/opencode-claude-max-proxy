@@ -69,7 +69,9 @@ export function buildQueryOptions(ctx: QueryContext) {
       permissionMode: "bypassPermissions" as const,
       allowDangerouslySkipPermissions: true,
       ...(systemContext ? {
-        systemPrompt: { type: "preset" as const, preset: "claude_code" as const, append: systemContext }
+        systemPrompt: passthrough
+          ? systemContext
+          : { type: "preset" as const, preset: "claude_code" as const, append: systemContext }
       } : {}),
       ...(passthrough
         ? {
@@ -85,7 +87,11 @@ export function buildQueryOptions(ctx: QueryContext) {
             mcpServers: { [mcpServerName]: createOpencodeMcpServer() },
           }),
       plugins: [],
-      env: { ...cleanEnv, ENABLE_TOOL_SEARCH: "false" },
+      env: {
+        ...cleanEnv,
+        ENABLE_TOOL_SEARCH: "false",
+        ...(passthrough ? { ENABLE_CLAUDEAI_MCP_SERVERS: "false" } : {}),
+      },
       ...(Object.keys(sdkAgents).length > 0 ? { agents: sdkAgents } : {}),
       ...(resumeSessionId ? { resume: resumeSessionId } : {}),
       ...(isUndo ? { forkSession: true, ...(undoRollbackUuid ? { resumeSessionAt: undoRollbackUuid } : {}) } : {}),

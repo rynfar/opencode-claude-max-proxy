@@ -21,9 +21,9 @@
   "scripts": {
     "start": "./bin/claude-proxy-supervisor.sh",
     "proxy": "./bin/claude-proxy-supervisor.sh",
-    "build": "rm -rf dist && bun build bin/cli.ts src/proxy/server.ts --outdir dist --target node --splitting --external @anthropic-ai/claude-agent-sdk --entry-naming '[name].js' && tsc -p tsconfig.build.json",
+    "build": "tsup && tsc -p tsconfig.build.json",
     "postbuild": "node --check dist/cli.js && node --check dist/server.js && test -f dist/proxy/server.d.ts",
-    "prepublishOnly": "bun run build",
+    "prepublishOnly": "npm run build",
     "test": "bun test --path-ignore-patterns '**/*session-store*' && bun test src/__tests__/proxy-session-store.test.ts && bun test src/__tests__/session-store-pruning.test.ts && bun test src/__tests__/proxy-session-store-locking.test.ts",
     "typecheck": "tsc --noEmit",
     "proxy:direct": "bun run ./bin/cli.ts"
@@ -37,6 +37,7 @@
     "@types/node": "^22.0.0",
     "glob": "^13.0.0",
     "hono": "^4.11.4",
+    "tsup": "^8.5.1",
     "typescript": "^5.8.2"
   },
   "files": [

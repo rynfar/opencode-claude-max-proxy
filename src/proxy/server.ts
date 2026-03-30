@@ -19,7 +19,7 @@ import { telemetryStore, diagnosticLog, createTelemetryRoutes, landingHtml } fro
 import type { RequestMetric } from "../telemetry"
 import { classifyError, isStaleSessionError, isRateLimitError } from "./errors"
 import { mapModelToClaudeModel, resolveClaudeExecutableAsync, isClosedControllerError, getClaudeAuthStatusAsync, hasExtendedContext, stripExtendedContext } from "./models"
-import { handleChatCompletions } from "./copilot/handler"
+import { handleChatCompletions, handleResponsesDirect } from "./copilot/handler"
 import { ALL_COPILOT_MODELS } from "./copilot/models"
 import { getLastUserMessage } from "./messages"
 import { detectAdapter } from "./adapters/detect"
@@ -139,7 +139,7 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
         status: "ok",
         service: "meridian",
         format: "anthropic",
-        endpoints: ["/v1/messages", "/messages", "/v1/chat/completions", "/telemetry", "/health"],
+        endpoints: ["/v1/messages", "/messages", "/v1/chat/completions", "/v1/responses", "/telemetry", "/health"],
         copilotModels: ALL_COPILOT_MODELS,
       })
     }
@@ -569,7 +569,7 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
 
                 // Preserve ALL content blocks (text, tool_use, thinking, etc.)
                 for (const block of message.message.content) {
-                  const b = block as Record<string, unknown>
+                  const b = block as unknown as Record<string, unknown>
                   // In passthrough mode, strip MCP prefix from tool names
                   if (passthrough && b.type === "tool_use" && typeof b.name === "string") {
                     b.name = stripMcpPrefix(b.name as string)
@@ -1193,6 +1193,8 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
 
   // GitHub Copilot models via OpenAI-compatible endpoint
   app.post("/v1/chat/completions", handleChatCompletions)
+  app.post("/v1/responses", handleResponsesDirect)
+  app.post("/responses", handleResponsesDirect)
 
   // Telemetry dashboard and API
   app.route("/telemetry", createTelemetryRoutes())

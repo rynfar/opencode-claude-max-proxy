@@ -23,6 +23,52 @@ const COPILOT_HEADERS = {
   "X-Github-Api-Version": "2025-04-01",
 }
 
+/**
+ * Direct passthrough for POST /v1/responses (Responses API format).
+ * Droid routes gpt-5.3-codex here when it detects a Responses API model.
+ * Body is already in Responses API format — forward as-is to Copilot.
+ */
+export async function handleResponsesDirect(c: Context): Promise<Response> {
+  let body: any
+  try {
+    body = await c.req.json()
+  } catch {
+    return c.json({ error: { type: "invalid_request", message: "Invalid JSON body" } }, 400)
+  }
+
+  let jwt: { token: string; endpoint: string }
+  try {
+    jwt = await getCopilotJWT()
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    return c.json({ error: { type: "authentication_error", message: msg } }, 401)
+  }
+
+  const requestId = randomUUID()
+  const url = `${jwt.endpoint}/responses`
+  const upstream = await fetchCopilot(url, jwt.token, requestId, body)
+
+  if (!upstream.ok) {
+    if (upstream.status === 401) clearJWTCache()
+    const errBody = await upstream.text()
+    return c.json({ error: { type: "upstream_error", message: errBody } }, upstream.status as any)
+  }
+
+  const stream = body.stream ?? true
+  if (!stream) {
+    const data = await upstream.json()
+    return c.json(data)
+  }
+
+  return new Response(upstream.body, {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      "X-Request-Id": requestId,
+    },
+  })
+}
+
 export async function handleChatCompletions(c: Context): Promise<Response> {
   let body: any
   try {

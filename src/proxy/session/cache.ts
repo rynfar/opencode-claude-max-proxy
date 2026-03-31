@@ -128,10 +128,16 @@ export function lookupSession(
   messages: Array<{ role: string; content: any }>,
   workingDirectory?: string
 ): LineageResult {
+  const DEBUG = process.env.DEBUG_PROXY === "true"
+  const fp = getConversationFingerprint(messages, workingDirectory)
+
   if (sessionId) {
     const cached = sessionCache.get(sessionId)
     if (cached) {
       const result = verifyLineage(cached, messages, sessionId, sessionCache)
+      if (DEBUG) {
+        console.error(`[DEBUG cache] HIT → ${result.type} (claudeSessionId=${cached.claudeSessionId?.substring(0, 8)}..., cache=memory)`)
+      }
       if (result.type === "continuation" || result.type === "compaction") touchSession(result.session)
       return result
     }
@@ -146,19 +152,27 @@ export function lookupSession(
         sdkMessageUuids: shared.sdkMessageUuids,
       }
       const result = verifyLineage(state, messages, sessionId, sessionCache)
+      if (DEBUG) {
+        console.error(`[DEBUG cache] HIT → SHARED FALLBACK (claudeSessionId=${shared.claudeSessionId?.substring(0, 8)}...)`)
+      }
       if (result.type === "continuation" || result.type === "compaction") {
         sessionCache.set(sessionId, state)
       }
       return result
     }
+    if (DEBUG) {
+      console.error(`[DEBUG cache] MISS → NEW (sessionId=${sessionId.substring(0, 8)}..., fp=${fp?.substring(0, 16) ?? "null"}...)`)
+    }
     return { type: "diverged" }
   }
 
-  const fp = getConversationFingerprint(messages, workingDirectory)
   if (fp) {
     const cached = fingerprintCache.get(fp)
     if (cached) {
       const result = verifyLineage(cached, messages, fp, fingerprintCache)
+      if (DEBUG) {
+        console.error(`[DEBUG cache] HIT → ${result.type} (claudeSessionId=${cached.claudeSessionId?.substring(0, 8)}..., cache=fingerprint)`)
+      }
       if (result.type === "continuation" || result.type === "compaction") touchSession(result.session)
       return result
     }
@@ -173,10 +187,20 @@ export function lookupSession(
         sdkMessageUuids: shared.sdkMessageUuids,
       }
       const result = verifyLineage(state, messages, fp, fingerprintCache)
+      if (DEBUG) {
+        console.error(`[DEBUG cache] HIT → SHARED FALLBACK (claudeSessionId=${shared.claudeSessionId?.substring(0, 8)}..., cache=fingerprint)`)
+      }
       if (result.type === "continuation" || result.type === "compaction") {
         fingerprintCache.set(fp, state)
       }
       return result
+    }
+    if (DEBUG) {
+      console.error(`[DEBUG cache] MISS → NEW (sessionId=undefined, fp=${fp.substring(0, 16)}...)`)
+    }
+  } else {
+    if (DEBUG) {
+      console.error(`[DEBUG cache] MISS → NEW (sessionId=undefined, fp=null)`)
     }
   }
   return { type: "diverged" }
@@ -192,6 +216,7 @@ export function storeSession(
   workingDirectory?: string,
   sdkMessageUuids?: Array<string | null>
 ) {
+  const DEBUG = process.env.DEBUG_PROXY === "true"
   if (!claudeSessionId) return
   const lineageHash = computeLineageHash(messages)
   const messageHashes = computeMessageHashes(messages)
@@ -203,10 +228,17 @@ export function storeSession(
     messageHashes,
     sdkMessageUuids,
   }
-  // In-memory cache
-  if (sessionId) sessionCache.set(sessionId, state)
   const fp = getConversationFingerprint(messages, workingDirectory)
-  if (fp) fingerprintCache.set(fp, state)
+  // In-memory cache
+  if (sessionId) {
+    sessionCache.set(sessionId, state)
+  }
+  if (fp) {
+    fingerprintCache.set(fp, state)
+  }
+  if (DEBUG) {
+    console.error(`[DEBUG cache] STORE (sessionId=${sessionId?.substring(0, 8) ?? "null"}..., fp=${fp?.substring(0, 16) ?? "null"}..., claudeSessionId=${claudeSessionId.substring(0, 8)}...)`)
+  }
   // Shared file store (cross-proxy resume)
   const key = sessionId || fp
   if (key) storeSharedSession(key, claudeSessionId, state.messageCount, lineageHash, messageHashes, sdkMessageUuids)

@@ -17,6 +17,41 @@ export interface ClaudeAuthStatus {
   email?: string
 }
 
+export const PREMIUM_SUBSCRIPTION_TYPES = new Set([
+  "max", "maxplan", "max5", "max20", "enterprise", "team"
+])
+
+export function isPremiumSubscription(subscriptionType?: string | null): boolean {
+  return subscriptionType ? PREMIUM_SUBSCRIPTION_TYPES.has(subscriptionType) : false
+}
+
+// TODO: choose cooldown duration — see trade-offs in commit message
+const EXTENDED_CONTEXT_COOLDOWN_MS = 5 * 60 * 1000
+
+/** Timestamps of the last rate-limit hit per [1m] model variant. */
+const extendedContextRateLimitedAt: Partial<Record<ClaudeModel, number>> = {}
+
+/**
+ * Record that an extended-context model was rate-limited.
+ * Called by server.ts when the [1m] → base fallback is triggered.
+ * Causes mapModelToClaudeModel to skip the [1m] variant for the cooldown window.
+ */
+export function recordExtendedContextRateLimit(model: ClaudeModel): void {
+  extendedContextRateLimitedAt[model] = Date.now()
+}
+
+/** Returns true if the [1m] variant is within its cooldown window. */
+function isExtendedContextOnCooldown(model: ClaudeModel): boolean {
+  const t = extendedContextRateLimitedAt[model]
+  return t !== undefined && Date.now() - t < EXTENDED_CONTEXT_COOLDOWN_MS
+}
+
+/** Reset circuit-breaker state — for testing only. */
+export function resetExtendedContextCooldown(): void {
+  for (const key of Object.keys(extendedContextRateLimitedAt)) {
+    delete extendedContextRateLimitedAt[key as ClaudeModel]
+  }
+}
 
 const AUTH_STATUS_CACHE_TTL_MS = 60_000
 /** Shorter TTL for failed auth checks — retry sooner to recover */
@@ -41,18 +76,27 @@ function supports1mContext(model: string): boolean {
   return true
 }
 
-export function mapModelToClaudeModel(model: string, subscriptionType?: string | null): ClaudeModel {
+export function mapModelToClaudeModel(model: string, subscriptionType?: string | null, agentMode?: string | null): ClaudeModel {
   if (model.includes("haiku")) return "haiku"
 
   const use1m = supports1mContext(model)
+  const isPremium = isPremiumSubscription(subscriptionType)
+  // Subagents don't need 1M context — use base model to save rate limit budget
+  const isSubagent = agentMode === "subagent"
 
-  if (model.includes("opus")) return use1m ? "opus[1m]" : "opus"
+  if (model.includes("opus")) {
+    if (use1m && !isSubagent && !isExtendedContextOnCooldown("opus[1m]")) return "opus[1m]"
+    return "opus"
+  }
 
   const sonnetOverride = process.env.MERIDIAN_SONNET_MODEL ?? process.env.CLAUDE_PROXY_SONNET_MODEL
   if (sonnetOverride === "sonnet" || sonnetOverride === "sonnet[1m]") return sonnetOverride
 
   if (!use1m) return "sonnet"
-  return subscriptionType === "max" ? "sonnet[1m]" : "sonnet"
+  if (!isPremium) return "sonnet"
+  if (isSubagent) return "sonnet"
+  if (isExtendedContextOnCooldown("sonnet[1m]")) return "sonnet"
+  return "sonnet[1m]"
 }
 
 /**

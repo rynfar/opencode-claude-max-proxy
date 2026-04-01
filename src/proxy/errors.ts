@@ -29,7 +29,7 @@ export function classifyError(errMsg: string): ClassifiedError {
     return {
       status: 429,
       type: "rate_limit_error",
-      message: "Claude Max rate limit reached. Wait a moment and try again."
+      message: "Claude Max rate limit reached. Consider reducing context size, waiting 30-60 seconds before retry, or switching to a lower context model."
     }
   }
 

@@ -15,6 +15,32 @@ import { diagnosticLog } from "../../telemetry"
  *  required to classify a mutation as compaction rather than a branch. */
 export const MIN_SUFFIX_FOR_COMPACTION = 2
 
+export interface TokenBudget {
+  inputTokens: number
+  cacheReadInputTokens: number
+  cacheCreationInputTokens: number
+  outputTokens: number
+  usedTokens: number
+  maxTokens: number
+  totalProcessedTokens: number
+  toolUses: number
+  durationMs: number
+}
+
+export function defaultTokenBudget(): TokenBudget {
+  return {
+    inputTokens: 0,
+    cacheReadInputTokens: 0,
+    cacheCreationInputTokens: 0,
+    outputTokens: 0,
+    usedTokens: 0,
+    maxTokens: 0,
+    totalProcessedTokens: 0,
+    toolUses: 0,
+    durationMs: 0,
+  }
+}
+
 export interface SessionState {
   claudeSessionId: string
   lastAccess: number
@@ -31,6 +57,8 @@ export interface SessionState {
    *  Only assistant messages have UUIDs (user messages are null).
    *  Used to find the rollback point for undo. */
   sdkMessageUuids?: Array<string | null>
+  /** Token usage tracking for proactive rate limit prevention. */
+  tokenBudget?: TokenBudget
 }
 
 /**

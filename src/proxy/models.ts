@@ -17,10 +17,141 @@ export interface ClaudeAuthStatus {
   email?: string
 }
 
+export const PREMIUM_SUBSCRIPTION_TYPES = new Set([
+  "max", "maxplan", "max5", "max20", "enterprise", "team"
+])
+
+export function isPremiumSubscription(subscriptionType?: string | null): boolean {
+  return subscriptionType ? PREMIUM_SUBSCRIPTION_TYPES.has(subscriptionType) : false
+}
+
+export interface TokenBudget {
+  inputTokens: number
+  cacheReadInputTokens: number
+  cacheCreationInputTokens: number
+  outputTokens: number
+  usedTokens: number
+  maxTokens: number
+  totalProcessedTokens: number
+  toolUses: number
+  durationMs: number
+}
+
+export const DEFAULT_TOKEN_BUDGET = (): TokenBudget => ({
+  inputTokens: 0,
+  cacheReadInputTokens: 0,
+  cacheCreationInputTokens: 0,
+  outputTokens: 0,
+  usedTokens: 0,
+  maxTokens: 0,
+  totalProcessedTokens: 0,
+  toolUses: 0,
+  durationMs: 0,
+})
+
+export const defaultTokenBudget = DEFAULT_TOKEN_BUDGET
+
+const SDK_PROBE_CACHE_TTL_MS = 5 * 60 * 1000
+let sdkProbeCache: { subscriptionType: string | null; authMethod: "subscription" | "api_key" | null; cachedAt: number } | null = null
+
+export function findAuthMethod(status: any): "subscription" | "api_key" | null {
+  if (!status) return null
+  if (status.authMethod === "api_key" || status.apiKeyAuth) return "api_key"
+  if (status.subscriptionType || status.plan || status.tier) return "subscription"
+  if (status.authMethod === "subscription" || status.anthropicAuth) return "subscription"
+  return null
+}
+
+export function findSubscriptionType(obj: any): string | null {
+  if (!obj || typeof obj !== "object") return null
+  if (obj.subscriptionType && typeof obj.subscriptionType === "string") return obj.subscriptionType
+  if (obj.subscription_type && typeof obj.subscription_type === "string") return obj.subscription_type
+  if (obj.plan && typeof obj.plan === "string") return obj.plan
+  if (obj.tier && typeof obj.tier === "string") return obj.tier
+  for (const key of Object.keys(obj)) {
+    if (key !== "toJSON" && typeof obj[key] === "object") {
+      const found = findSubscriptionType(obj[key])
+      if (found) return found
+    }
+  }
+  return null
+}
+
+export async function probeClaudeCapabilities(claudeExecutable: string): Promise<{
+  subscriptionType: string | null
+  authMethod: "subscription" | "api_key" | null
+}> {
+  if (sdkProbeCache && Date.now() - sdkProbeCache.cachedAt < SDK_PROBE_CACHE_TTL_MS) {
+    return { subscriptionType: sdkProbeCache.subscriptionType, authMethod: sdkProbeCache.authMethod }
+  }
+
+  const { query } = await import("@anthropic-ai/claude-agent-sdk")
+
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 10_000)
+
+  try {
+    const q = query({
+      prompt: "",
+      options: {
+        maxTurns: 0,
+        pathToClaudeCodeExecutable: claudeExecutable,
+        abortController: controller,
+      },
+    })
+
+    const initResult = await q.initializationResult()
+    clearTimeout(timeout)
+
+    const subscriptionType = findSubscriptionType(initResult)
+    const authMethod = findAuthMethod(initResult) ?? "subscription"
+
+    sdkProbeCache = { subscriptionType, authMethod, cachedAt: Date.now() }
+
+    await q.interrupt()
+    return { subscriptionType, authMethod }
+  } catch {
+    clearTimeout(timeout)
+    return { subscriptionType: null, authMethod: null }
+  }
+}
+
+export function resetSdkProbeCache(): void {
+  sdkProbeCache = null
+}
+
 
 const AUTH_STATUS_CACHE_TTL_MS = 60_000
 /** Shorter TTL for failed auth checks — retry sooner to recover */
 const AUTH_STATUS_FAILURE_TTL_MS = 5_000
+
+// TODO: choose cooldown duration — see trade-offs in commit message
+const EXTENDED_CONTEXT_COOLDOWN_MS = 5 * 60 * 1000
+
+/** Timestamps of the last rate-limit hit per [1m] model variant. */
+const extendedContextRateLimitedAt: Partial<Record<ClaudeModel, number>> = {}
+
+/**
+ * Record that an extended-context model was rate-limited.
+ * Called by server.ts when the [1m] → base fallback is triggered.
+ * Causes mapModelToClaudeModel to skip the [1m] variant for the cooldown window.
+ */
+export function recordExtendedContextRateLimit(model: ClaudeModel): void {
+  extendedContextRateLimitedAt[model] = Date.now()
+}
+
+/** Returns true if the [1m] variant is within its cooldown window. */
+function isExtendedContextOnCooldown(model: ClaudeModel): boolean {
+  const t = extendedContextRateLimitedAt[model]
+  return t !== undefined && Date.now() - t < EXTENDED_CONTEXT_COOLDOWN_MS
+}
+
+/** Reset circuit-breaker state — for testing only. */
+export function resetExtendedContextCooldown(): void {
+  for (const key of Object.keys(extendedContextRateLimitedAt)) {
+    delete extendedContextRateLimitedAt[key as ClaudeModel]
+  }
+}
 
 let cachedAuthStatus: ClaudeAuthStatus | null = null
 /** Last successfully retrieved auth status — survives transient failures
@@ -41,18 +172,27 @@ function supports1mContext(model: string): boolean {
   return true
 }
 
-export function mapModelToClaudeModel(model: string, subscriptionType?: string | null): ClaudeModel {
+export function mapModelToClaudeModel(model: string, subscriptionType?: string | null, agentMode?: string | null): ClaudeModel {
   if (model.includes("haiku")) return "haiku"
 
   const use1m = supports1mContext(model)
+  const isPremium = isPremiumSubscription(subscriptionType)
+  // Subagents don't need 1M context — use base model to save rate limit budget
+  const isSubagent = agentMode === "subagent"
 
-  if (model.includes("opus")) return use1m ? "opus[1m]" : "opus"
+  if (model.includes("opus")) {
+    if (use1m && !isSubagent && !isExtendedContextOnCooldown("opus[1m]")) return "opus[1m]"
+    return "opus"
+  }
 
   const sonnetOverride = process.env.MERIDIAN_SONNET_MODEL ?? process.env.CLAUDE_PROXY_SONNET_MODEL
   if (sonnetOverride === "sonnet" || sonnetOverride === "sonnet[1m]") return sonnetOverride
 
   if (!use1m) return "sonnet"
-  return subscriptionType === "max" ? "sonnet[1m]" : "sonnet"
+  if (!isPremium) return "sonnet"
+  if (isSubagent) return "sonnet"
+  if (isExtendedContextOnCooldown("sonnet[1m]")) return "sonnet"
+  return "sonnet[1m]"
 }
 
 /**

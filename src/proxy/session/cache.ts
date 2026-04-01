@@ -12,6 +12,7 @@ import {
   computeLineageHash,
   computeMessageHashes,
   verifyLineage,
+  defaultTokenBudget,
   type SessionState,
   type LineageResult,
 } from "./lineage"
@@ -144,6 +145,7 @@ export function lookupSession(
         lineageHash: shared.lineageHash || "",
         messageHashes: shared.messageHashes,
         sdkMessageUuids: shared.sdkMessageUuids,
+        tokenBudget: shared.tokenBudget ?? defaultTokenBudget(),
       }
       const result = verifyLineage(state, messages, sessionId, sessionCache)
       if (result.type === "continuation" || result.type === "compaction") {
@@ -171,6 +173,7 @@ export function lookupSession(
         lineageHash: shared.lineageHash || "",
         messageHashes: shared.messageHashes,
         sdkMessageUuids: shared.sdkMessageUuids,
+        tokenBudget: shared.tokenBudget ?? defaultTokenBudget(),
       }
       const result = verifyLineage(state, messages, fp, fingerprintCache)
       if (result.type === "continuation" || result.type === "compaction") {
@@ -190,7 +193,8 @@ export function storeSession(
   messages: Array<{ role: string; content: any }>,
   claudeSessionId: string,
   workingDirectory?: string,
-  sdkMessageUuids?: Array<string | null>
+  sdkMessageUuids?: Array<string | null>,
+  tokenBudget?: SessionState["tokenBudget"]
 ) {
   if (!claudeSessionId) return
   const lineageHash = computeLineageHash(messages)
@@ -202,6 +206,7 @@ export function storeSession(
     lineageHash,
     messageHashes,
     sdkMessageUuids,
+    tokenBudget,
   }
   // In-memory cache
   if (sessionId) sessionCache.set(sessionId, state)
@@ -209,5 +214,5 @@ export function storeSession(
   if (fp) fingerprintCache.set(fp, state)
   // Shared file store (cross-proxy resume)
   const key = sessionId || fp
-  if (key) storeSharedSession(key, claudeSessionId, state.messageCount, lineageHash, messageHashes, sdkMessageUuids)
+  if (key) storeSharedSession(key, claudeSessionId, state.messageCount, lineageHash, messageHashes, sdkMessageUuids, tokenBudget)
 }

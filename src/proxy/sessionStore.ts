@@ -35,6 +35,18 @@ export interface StoredSession {
   messageHashes?: string[]
   /** Per-message SDK assistant UUIDs for undo rollback (null for user messages) */
   sdkMessageUuids?: Array<string | null>
+  /** Token usage tracking for proactive rate limit prevention */
+  tokenBudget?: {
+    inputTokens: number
+    cacheReadInputTokens: number
+    cacheCreationInputTokens: number
+    outputTokens: number
+    usedTokens: number
+    maxTokens: number
+    totalProcessedTokens: number
+    toolUses: number
+    durationMs: number
+  }
 }
 
 // No time-based session expiry. SDK sessions persist on Anthropic's side
@@ -174,7 +186,7 @@ export function lookupSharedSession(key: string): StoredSession | undefined {
   return store[key]
 }
 
-export function storeSharedSession(key: string, claudeSessionId: string, messageCount?: number, lineageHash?: string, messageHashes?: string[], sdkMessageUuids?: Array<string | null>): void {
+export function storeSharedSession(key: string, claudeSessionId: string, messageCount?: number, lineageHash?: string, messageHashes?: string[], sdkMessageUuids?: Array<string | null>, tokenBudget?: StoredSession["tokenBudget"]): void {
   const path = getStorePath()
   const lockPath = `${path}.lock`
   const hasLock = skipLocking ? false : acquireLock(lockPath)
@@ -192,6 +204,7 @@ export function storeSharedSession(key: string, claudeSessionId: string, message
       lineageHash: lineageHash ?? existing?.lineageHash,
       messageHashes: messageHashes ?? existing?.messageHashes,
       sdkMessageUuids: sdkMessageUuids ?? existing?.sdkMessageUuids,
+      tokenBudget: tokenBudget ?? existing?.tokenBudget,
     }
 
     // Prune oldest entries if over capacity (count-based, not time-based)

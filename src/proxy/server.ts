@@ -18,7 +18,7 @@ import { createPassthroughMcpServer, stripMcpPrefix, PASSTHROUGH_MCP_NAME, PASST
 import { telemetryStore, diagnosticLog, createTelemetryRoutes, landingHtml } from "../telemetry"
 import type { RequestMetric } from "../telemetry"
 import { classifyError, isStaleSessionError, isRateLimitError } from "./errors"
-import { mapModelToClaudeModel, resolveClaudeExecutableAsync, isClosedControllerError, getClaudeAuthStatusAsync, hasExtendedContext, stripExtendedContext } from "./models"
+import { mapModelToClaudeModel, resolveClaudeExecutableAsync, isClosedControllerError, getClaudeAuthStatusAsync, hasExtendedContext, stripExtendedContext, recordExtendedContextRateLimit, type TokenBudget, defaultTokenBudget } from "./models"
 import { handleChatCompletions, handleResponsesDirect } from "./copilot/handler"
 import { ALL_COPILOT_MODELS } from "./copilot/models"
 import { getLastUserMessage } from "./messages"
@@ -182,7 +182,9 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
       try {
         const body = await c.req.json()
         const authStatus = await getClaudeAuthStatusAsync()
-        let model = mapModelToClaudeModel(body.model || "sonnet", authStatus?.subscriptionType)
+        const agentMode = c.req.header("x-opencode-agent-mode") || null
+        const agentName = c.req.header("x-opencode-agent-name") || null
+        let model = mapModelToClaudeModel(body.model || "sonnet", authStatus?.subscriptionType, agentMode)
         const stream = body.stream ?? true
         const adapter = detectAdapter(c)
         const workingDirectory = (process.env.MERIDIAN_WORKDIR ?? process.env.CLAUDE_PROXY_WORKDIR) || adapter.extractWorkingDirectory(body) || process.cwd()
@@ -229,7 +231,7 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
         }).join(" → ")
         const lineageType = lineageResult.type === "diverged" && !cachedSession ? "new" : lineageResult.type
         const msgCount = Array.isArray(body.messages) ? body.messages.length : 0
-        const requestLogLine = `${requestMeta.requestId} model=${model} stream=${stream} tools=${body.tools?.length ?? 0} lineage=${lineageType} session=${resumeSessionId?.slice(0, 8) || "new"}${isUndo && undoRollbackUuid ? ` rollback=${undoRollbackUuid.slice(0, 8)}` : ""} active=${activeSessions}/${MAX_CONCURRENT_SESSIONS} msgCount=${msgCount}`
+        const requestLogLine = `${requestMeta.requestId} model=${model} stream=${stream} tools=${body.tools?.length ?? 0} lineage=${lineageType} session=${resumeSessionId?.slice(0, 8) || "new"}${isUndo && undoRollbackUuid ? ` rollback=${undoRollbackUuid.slice(0, 8)}` : ""}${agentName ? ` agent=${agentName}${agentMode ? `(${agentMode})` : ""}` : ""} active=${activeSessions}/${MAX_CONCURRENT_SESSIONS} msgCount=${msgCount}`
         console.error(`[PROXY] ${requestLogLine} msgs=${msgSummary}`)
         diagnosticLog.session(`${requestLogLine}`, requestMeta.requestId)
 
@@ -448,6 +450,11 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
           // Pad to current message count (the last user message has no UUID yet)
           while (sdkUuidMap.length < allMessages.length) sdkUuidMap.push(null)
 
+          // Token budget tracking: start with cached session budget and accumulate
+          const tokenBudget: TokenBudget = cachedSession?.tokenBudget
+            ? { ...cachedSession.tokenBudget }
+            : { inputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, outputTokens: 0, usedTokens: 0, maxTokens: 0, totalProcessedTokens: 0, toolUses: 0, durationMs: 0 }
+
           claudeLog("upstream.start", { mode: "non_stream", model })
 
           try {
@@ -517,6 +524,7 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
                     if (hasExtendedContext(model)) {
                       const from = model
                       model = stripExtendedContext(model)
+                      recordExtendedContextRateLimit(from)
                       claudeLog("upstream.context_fallback", {
                         mode: "non_stream",
                         from,
@@ -565,6 +573,28 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
                     model,
                     ttfbMs: firstChunkAt - upstreamStartAt
                   })
+                }
+
+                // Extract token usage from assistant message
+                const msg = message as any
+                if (msg.message?.usage) {
+                  const u = msg.message.usage
+                  tokenBudget.inputTokens += u.input_tokens ?? 0
+                  tokenBudget.cacheReadInputTokens += u.cache_read_input_tokens ?? 0
+                  tokenBudget.cacheCreationInputTokens += u.cache_creation_input_tokens ?? 0
+                  tokenBudget.outputTokens += u.output_tokens ?? 0
+                  tokenBudget.usedTokens += u.used_tokens ?? 0
+                  if (u.max_tokens) tokenBudget.maxTokens = Math.max(tokenBudget.maxTokens, u.max_tokens)
+                  tokenBudget.totalProcessedTokens += (u.input_tokens ?? 0) + (u.output_tokens ?? 0)
+                }
+                if (msg.message?.modelUsage) {
+                  const mu = msg.message.modelUsage
+                  tokenBudget.inputTokens += mu.input_tokens ?? mu.inputTokens ?? 0
+                  tokenBudget.cacheReadInputTokens += mu.cache_read_input_tokens ?? mu.cacheReadInputTokens ?? 0
+                  tokenBudget.cacheCreationInputTokens += mu.cache_creation_input_tokens ?? mu.cacheCreationInputTokens ?? 0
+                  tokenBudget.outputTokens += mu.output_tokens ?? mu.outputTokens ?? 0
+                  if (mu.max_tokens || mu.maxTokens) tokenBudget.maxTokens = Math.max(tokenBudget.maxTokens, mu.max_tokens ?? mu.maxTokens ?? 0)
+                  tokenBudget.totalProcessedTokens += (mu.input_tokens ?? mu.inputTokens ?? 0) + (mu.output_tokens ?? mu.outputTokens ?? 0)
                 }
 
                 // Preserve ALL content blocks (text, tool_use, thinking, etc.)
@@ -659,7 +689,7 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
 
           // Store session for future resume
               if (currentSessionId) {
-                storeSession(agentSessionId, body.messages || [], currentSessionId, workingDirectory, sdkUuidMap)
+                storeSession(agentSessionId, body.messages || [], currentSessionId, workingDirectory, sdkUuidMap, tokenBudget)
               }
 
               const responseSessionId = currentSessionId || resumeSessionId || `session_${Date.now()}`
@@ -720,6 +750,11 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
               ? [...cachedSession.sdkMessageUuids]
               : new Array(allMessages.length - 1).fill(null)
             while (sdkUuidMap.length < allMessages.length) sdkUuidMap.push(null)
+
+            // Token budget tracking: start with cached session budget and accumulate
+            const tokenBudget: TokenBudget = cachedSession?.tokenBudget
+              ? { ...cachedSession.tokenBudget }
+              : { inputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, outputTokens: 0, usedTokens: 0, maxTokens: 0, totalProcessedTokens: 0, toolUses: 0, durationMs: 0 }
 
             let messageStartEmitted = false
 
@@ -784,6 +819,7 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
                       if (hasExtendedContext(model)) {
                         const from = model
                         model = stripExtendedContext(model)
+                        recordExtendedContextRateLimit(from)
                         claudeLog("upstream.context_fallback", {
                           mode: "stream",
                           from,
@@ -877,6 +913,16 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
                     if (eventType === "message_start") {
                       skipBlockIndices.clear()
                       sdkToClientIndex.clear()
+                      // Extract token usage from message_start (input tokens + cache stats)
+                      const startMsg = (event as any).message
+                      if (startMsg?.usage) {
+                        const u = startMsg.usage
+                        tokenBudget.inputTokens += u.input_tokens ?? 0
+                        tokenBudget.cacheReadInputTokens += u.cache_read_input_tokens ?? 0
+                        tokenBudget.cacheCreationInputTokens += u.cache_creation_input_tokens ?? 0
+                        tokenBudget.outputTokens += u.output_tokens ?? 0
+                        tokenBudget.totalProcessedTokens += (u.input_tokens ?? 0) + (u.output_tokens ?? 0)
+                      }
                       // Only emit the first message_start — subsequent ones are internal SDK turns
                       if (messageStartEmitted) {
                         continue
@@ -930,6 +976,27 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
                         // All tool_use blocks in this turn were MCP — skip this delta
                         continue
                       }
+                      // Extract token usage from message_delta
+                      // Anthropic streaming spec: usage is at event.usage, not event.delta.usage
+                      const deltaUsage = (event as any).usage
+                      if (deltaUsage) {
+                        tokenBudget.outputTokens += deltaUsage.output_tokens ?? 0
+                        tokenBudget.totalProcessedTokens += deltaUsage.output_tokens ?? 0
+                      }
+                    }
+
+                    // Extract token usage from message_stop
+                    if (eventType === "message_stop") {
+                      const usage = (event as any).usage
+                      if (usage) {
+                        tokenBudget.inputTokens += usage.input_tokens ?? 0
+                        tokenBudget.cacheReadInputTokens += usage.cache_read_input_tokens ?? 0
+                        tokenBudget.cacheCreationInputTokens += usage.cache_creation_input_tokens ?? 0
+                        tokenBudget.outputTokens += usage.output_tokens ?? 0
+                        tokenBudget.usedTokens += usage.used_tokens ?? 0
+                        if (usage.max_tokens) tokenBudget.maxTokens = Math.max(tokenBudget.maxTokens, usage.max_tokens)
+                        tokenBudget.totalProcessedTokens += (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0)
+                      }
                     }
 
                     // Forward all other events (text, non-MCP tool_use like Task, message events)
@@ -960,9 +1027,9 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
                 textEventsForwarded
               })
 
-              // Store session for future resume
+          // Store session for future resume
               if (currentSessionId) {
-                storeSession(agentSessionId, body.messages || [], currentSessionId, workingDirectory, sdkUuidMap)
+                storeSession(agentSessionId, body.messages || [], currentSessionId, workingDirectory, sdkUuidMap, tokenBudget)
               }
 
               if (!streamClosed) {

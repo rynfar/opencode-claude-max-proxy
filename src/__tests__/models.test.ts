@@ -2,7 +2,7 @@
  * Unit tests for model mapping and utility functions.
  */
 import { afterEach, beforeEach, describe, it, expect, mock } from "bun:test"
-import { mapModelToClaudeModel, isClosedControllerError, resetCachedClaudeAuthStatus, getClaudeAuthStatusAsync, stripExtendedContext, hasExtendedContext, expireAuthStatusCache } from "../proxy/models"
+import { mapModelToClaudeModel, isClosedControllerError, resetCachedClaudeAuthStatus, getClaudeAuthStatusAsync, stripExtendedContext, hasExtendedContext, expireAuthStatusCache, recordExtendedContextRateLimit, resetExtendedContextCooldown, isPremiumSubscription, PREMIUM_SUBSCRIPTION_TYPES, findSubscriptionType, findAuthMethod, defaultTokenBudget } from "../proxy/models"
 
 describe("mapModelToClaudeModel", () => {
   const originalSonnetModel = process.env.CLAUDE_PROXY_SONNET_MODEL
@@ -11,6 +11,7 @@ describe("mapModelToClaudeModel", () => {
     if (originalSonnetModel === undefined) delete process.env.CLAUDE_PROXY_SONNET_MODEL
     else process.env.CLAUDE_PROXY_SONNET_MODEL = originalSonnetModel
     resetCachedClaudeAuthStatus()
+    resetExtendedContextCooldown()
   })
 
   it("maps opus 4.6 models to opus[1m]", () => {
@@ -55,6 +56,60 @@ describe("mapModelToClaudeModel", () => {
 
     process.env.CLAUDE_PROXY_SONNET_MODEL = "sonnet"
     expect(mapModelToClaudeModel("sonnet", "max")).toBe("sonnet")
+  })
+})
+
+describe("subagent model selection", () => {
+  afterEach(() => {
+    resetExtendedContextCooldown()
+  })
+
+  it("skips sonnet[1m] for subagent mode", () => {
+    expect(mapModelToClaudeModel("sonnet", "max", "subagent")).toBe("sonnet")
+  })
+
+  it("skips opus[1m] for subagent mode", () => {
+    expect(mapModelToClaudeModel("opus", "max", "subagent")).toBe("opus")
+  })
+
+  it("uses sonnet[1m] for primary mode", () => {
+    expect(mapModelToClaudeModel("sonnet", "max", "primary")).toBe("sonnet[1m]")
+  })
+
+  it("uses sonnet[1m] when no agent mode specified", () => {
+    expect(mapModelToClaudeModel("sonnet", "max")).toBe("sonnet[1m]")
+    expect(mapModelToClaudeModel("sonnet", "max", null)).toBe("sonnet[1m]")
+  })
+
+  it("haiku is unaffected by agent mode", () => {
+    expect(mapModelToClaudeModel("haiku", "max", "subagent")).toBe("haiku")
+  })
+})
+
+describe("extended context circuit breaker", () => {
+  afterEach(() => {
+    resetExtendedContextCooldown()
+  })
+
+  it("skips sonnet[1m] after a rate-limit is recorded", () => {
+    recordExtendedContextRateLimit("sonnet[1m]")
+    expect(mapModelToClaudeModel("sonnet", "max")).toBe("sonnet")
+  })
+
+  it("skips opus[1m] after a rate-limit is recorded", () => {
+    recordExtendedContextRateLimit("opus[1m]")
+    expect(mapModelToClaudeModel("opus")).toBe("opus")
+  })
+
+  it("resumes sonnet[1m] after cooldown is reset", () => {
+    recordExtendedContextRateLimit("sonnet[1m]")
+    resetExtendedContextCooldown()
+    expect(mapModelToClaudeModel("sonnet", "max")).toBe("sonnet[1m]")
+  })
+
+  it("sonnet[1m] cooldown does not affect opus[1m]", () => {
+    recordExtendedContextRateLimit("sonnet[1m]")
+    expect(mapModelToClaudeModel("opus")).toBe("opus[1m]")
   })
 })
 
@@ -257,5 +312,110 @@ describe("isClosedControllerError", () => {
     expect(isClosedControllerError(null)).toBe(false)
     expect(isClosedControllerError(undefined)).toBe(false)
     expect(isClosedControllerError(42)).toBe(false)
+  })
+})
+
+describe("isPremiumSubscription", () => {
+  it("returns true for max subscription", () => {
+    expect(isPremiumSubscription("max")).toBe(true)
+  })
+
+  it("returns true for other premium tiers", () => {
+    expect(isPremiumSubscription("maxplan")).toBe(true)
+    expect(isPremiumSubscription("max5")).toBe(true)
+    expect(isPremiumSubscription("max20")).toBe(true)
+    expect(isPremiumSubscription("enterprise")).toBe(true)
+    expect(isPremiumSubscription("team")).toBe(true)
+  })
+
+  it("returns false for non-premium tiers", () => {
+    expect(isPremiumSubscription("pro")).toBe(false)
+    expect(isPremiumSubscription("free")).toBe(false)
+    expect(isPremiumSubscription("")).toBe(false)
+  })
+
+  it("returns false for null and undefined", () => {
+    expect(isPremiumSubscription(null)).toBe(false)
+    expect(isPremiumSubscription(undefined)).toBe(false)
+  })
+})
+
+describe("PREMIUM_SUBSCRIPTION_TYPES", () => {
+  it("contains expected subscription types", () => {
+    expect(PREMIUM_SUBSCRIPTION_TYPES.has("max")).toBe(true)
+    expect(PREMIUM_SUBSCRIPTION_TYPES.has("team")).toBe(true)
+    expect(PREMIUM_SUBSCRIPTION_TYPES.has("enterprise")).toBe(true)
+  })
+
+  it("does not contain non-premium types", () => {
+    expect(PREMIUM_SUBSCRIPTION_TYPES.has("pro")).toBe(false)
+    expect(PREMIUM_SUBSCRIPTION_TYPES.has("free")).toBe(false)
+  })
+})
+
+describe("findSubscriptionType", () => {
+  it("finds subscriptionType at top level", () => {
+    expect(findSubscriptionType({ subscriptionType: "max" })).toBe("max")
+  })
+
+  it("finds subscription_type (snake case)", () => {
+    expect(findSubscriptionType({ subscription_type: "team" })).toBe("team")
+  })
+
+  it("finds plan field", () => {
+    expect(findSubscriptionType({ plan: "enterprise" })).toBe("enterprise")
+  })
+
+  it("finds tier field", () => {
+    expect(findSubscriptionType({ tier: "max5" })).toBe("max5")
+  })
+
+  it("finds nested subscriptionType", () => {
+    expect(findSubscriptionType({ account: { subscriptionType: "maxplan" } })).toBe("maxplan")
+  })
+
+  it("returns null when not found", () => {
+    expect(findSubscriptionType({})).toBe(null)
+    expect(findSubscriptionType(null)).toBe(null)
+    expect(findSubscriptionType(undefined)).toBe(null)
+  })
+})
+
+describe("findAuthMethod", () => {
+  it("returns subscription for subscriptionType", () => {
+    expect(findAuthMethod({ subscriptionType: "max" })).toBe("subscription")
+  })
+
+  it("returns api_key for apiKeyAuth", () => {
+    expect(findAuthMethod({ apiKeyAuth: true })).toBe("api_key")
+  })
+
+  it("returns api_key for authMethod=api_key", () => {
+    expect(findAuthMethod({ authMethod: "api_key" })).toBe("api_key")
+  })
+
+  it("returns subscription for authMethod=subscription", () => {
+    expect(findAuthMethod({ authMethod: "subscription" })).toBe("subscription")
+  })
+
+  it("returns null when not found", () => {
+    expect(findAuthMethod({})).toBe(null)
+    expect(findAuthMethod(null)).toBe(null)
+    expect(findAuthMethod(undefined)).toBe(null)
+  })
+})
+
+describe("defaultTokenBudget", () => {
+  it("returns zeroed token budget", () => {
+    const budget = defaultTokenBudget()
+    expect(budget.inputTokens).toBe(0)
+    expect(budget.cacheReadInputTokens).toBe(0)
+    expect(budget.cacheCreationInputTokens).toBe(0)
+    expect(budget.outputTokens).toBe(0)
+    expect(budget.usedTokens).toBe(0)
+    expect(budget.maxTokens).toBe(0)
+    expect(budget.totalProcessedTokens).toBe(0)
+    expect(budget.toolUses).toBe(0)
+    expect(budget.durationMs).toBe(0)
   })
 })

@@ -7,7 +7,7 @@
  * GitHub issue #189: "Build command lacks file change visibility"
  */
 
-import { describe, it, expect, mock, beforeEach } from "bun:test"
+import { describe, it, expect, mock, beforeEach, afterEach } from "bun:test"
 import {
   assistantMessage,
   messageStart,
@@ -435,5 +435,127 @@ describe("File change visibility: streaming response", () => {
     for (let i = 1; i < indices.length; i++) {
       expect(indices[i]).toBeGreaterThan(indices[i - 1]!)
     }
+  })
+})
+
+describe("File change visibility: MERIDIAN_NO_FILE_CHANGES opt-out", () => {
+  let origMeridian: string | undefined
+  let origClaude: string | undefined
+
+  beforeEach(() => {
+    mockMessages = []
+    capturedQueryParams = null
+    clearSessionCache()
+    origMeridian = process.env.MERIDIAN_NO_FILE_CHANGES
+    origClaude = process.env.CLAUDE_PROXY_NO_FILE_CHANGES
+  })
+
+  afterEach(() => {
+    if (origMeridian !== undefined) process.env.MERIDIAN_NO_FILE_CHANGES = origMeridian
+    else delete process.env.MERIDIAN_NO_FILE_CHANGES
+    if (origClaude !== undefined) process.env.CLAUDE_PROXY_NO_FILE_CHANGES = origClaude
+    else delete process.env.CLAUDE_PROXY_NO_FILE_CHANGES
+  })
+
+  it("should suppress PostToolUse hook registration when MERIDIAN_NO_FILE_CHANGES=1", async () => {
+    process.env.MERIDIAN_NO_FILE_CHANGES = "1"
+    mockMessages = [assistantMessage([{ type: "text", text: "Done" }])]
+
+    const app = createTestApp()
+    await post(app, {
+      model: "claude-sonnet-4-5",
+      max_tokens: 1024,
+      stream: false,
+      messages: [{ role: "user", content: "Do something" }],
+    })
+
+    expect(capturedQueryParams?.options?.hooks?.PostToolUse).toBeUndefined()
+  })
+
+  it("should suppress file change summary in non-streaming response when MERIDIAN_NO_FILE_CHANGES=1", async () => {
+    process.env.MERIDIAN_NO_FILE_CHANGES = "1"
+    mockMessages = [
+      assistantMessage([
+        { type: "tool_use", id: "toolu_w1", name: "mcp__opencode__write", input: { path: "src/new-file.ts", content: "export const x = 1" } },
+      ]),
+      assistantMessage([{ type: "text", text: "I created the file." }]),
+    ]
+
+    const app = createTestApp()
+    const response = await (await post(app, {
+      model: "claude-sonnet-4-5",
+      max_tokens: 1024,
+      stream: false,
+      messages: [{ role: "user", content: "Create a file" }],
+    })).json()
+
+    const allText = response.content
+      .filter((b: any) => b.type === "text")
+      .map((b: any) => b.text)
+      .join("")
+    expect(allText).not.toContain("Files changed:")
+    expect(allText).toContain("I created the file.")
+  })
+
+  it("should suppress file change SSE block in streaming response when MERIDIAN_NO_FILE_CHANGES=1", async () => {
+    process.env.MERIDIAN_NO_FILE_CHANGES = "1"
+    mockMessages = [
+      messageStart(),
+      toolUseBlockStart(0, "mcp__opencode__write", "toolu_w2"),
+      inputJsonDelta(0, '{"path":"src/out.ts","content":"export {}"}'),
+      blockStop(0),
+      messageDelta("tool_use"),
+      messageStop(),
+      messageStart(),
+      textBlockStart(0),
+      textDelta(0, "File written."),
+      blockStop(0),
+      messageDelta("end_turn"),
+      messageStop(),
+    ]
+
+    const app = createTestApp()
+    const events = await postStream(app, {
+      model: "claude-sonnet-4-5",
+      max_tokens: 1024,
+      stream: true,
+      messages: [{ role: "user", content: "Write a file" }],
+    })
+
+    // No file change text block should be present
+    const textBlockStarts = events.filter(
+      (e) => e.event === "content_block_start" && (e.data as any).content_block?.type === "text"
+    )
+    const fileChangeBlocks = textBlockStarts.filter((e) => {
+      const deltas = events.filter(
+        (d) => d.event === "content_block_delta" && (d.data as any).index === (e.data as any).index
+      )
+      return deltas.some((d) => (d.data as any).delta?.text?.includes("Files changed:"))
+    })
+    expect(fileChangeBlocks).toHaveLength(0)
+  })
+
+  it("should suppress summary when CLAUDE_PROXY_NO_FILE_CHANGES=1 (fallback env var)", async () => {
+    process.env.CLAUDE_PROXY_NO_FILE_CHANGES = "1"
+    mockMessages = [
+      assistantMessage([
+        { type: "tool_use", id: "toolu_w3", name: "mcp__opencode__write", input: { path: "src/f.ts", content: "x" } },
+      ]),
+      assistantMessage([{ type: "text", text: "Done." }]),
+    ]
+
+    const app = createTestApp()
+    const response = await (await post(app, {
+      model: "claude-sonnet-4-5",
+      max_tokens: 1024,
+      stream: false,
+      messages: [{ role: "user", content: "Write a file" }],
+    })).json()
+
+    const allText = response.content
+      .filter((b: any) => b.type === "text")
+      .map((b: any) => b.text)
+      .join("")
+    expect(allText).not.toContain("Files changed:")
   })
 })

@@ -14,7 +14,10 @@ import { crushAdapter } from "../proxy/adapters/crush"
 function makeContext(userAgent: string): any {
   return {
     req: {
-      header: (name: string) => name.toLowerCase() === "user-agent" ? userAgent : undefined,
+      header: (name?: string) => {
+        if (!name) return userAgent ? { "user-agent": userAgent } : {}
+        return name.toLowerCase() === "user-agent" ? userAgent : undefined
+      },
     },
   }
 }
@@ -70,7 +73,7 @@ describe("detectAdapter — OpenCode fallback", () => {
   })
 
   it("returns openCodeAdapter when User-Agent header is missing", () => {
-    const ctx = { req: { header: () => undefined } }
+    const ctx = { req: { header: (name?: string) => name ? undefined : {} } }
     const adapter = detectAdapter(ctx as any)
     expect(adapter).toBe(openCodeAdapter)
   })

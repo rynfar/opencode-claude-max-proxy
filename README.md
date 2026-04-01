@@ -228,7 +228,8 @@ src/proxy/
 │   ├── detect.ts          ← Agent detection from request headers
 │   ├── opencode.ts        ← OpenCode adapter
 │   ├── crush.ts           ← Crush (Charm) adapter
-│   └── droid.ts           ← Droid (Factory AI) adapter
+│   ├── droid.ts           ← Droid (Factory AI) adapter
+│   └── passthrough.ts     ← LiteLLM passthrough adapter
 ├── query.ts               ← SDK query options builder
 ├── errors.ts              ← Error classification
 ├── models.ts              ← Model mapping (sonnet/opus/haiku)

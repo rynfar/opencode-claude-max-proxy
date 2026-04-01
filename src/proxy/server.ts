@@ -181,8 +181,10 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
         const body = await c.req.json()
         const authStatus = await getClaudeAuthStatusAsync()
         let model = mapModelToClaudeModel(body.model || "sonnet", authStatus?.subscriptionType)
-        const stream = body.stream ?? true
         const adapter = detectAdapter(c)
+        // Allow adapter to override streaming preference (e.g. LiteLLM requires non-streaming)
+        const adapterStreamPref = adapter.prefersStreaming?.(body)
+        const stream = adapterStreamPref !== undefined ? adapterStreamPref : (body.stream ?? true)
         const workingDirectory = (process.env.MERIDIAN_WORKDIR ?? process.env.CLAUDE_PROXY_WORKDIR) || adapter.extractWorkingDirectory(body) || process.cwd()
 
         // Strip env vars that would cause the SDK subprocess to loop back through

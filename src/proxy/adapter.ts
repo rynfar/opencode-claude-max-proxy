@@ -78,6 +78,15 @@ export interface AgentAdapter {
   buildSystemContextAddendum?(body: any, sdkAgents: Record<string, any>): string
 
   /**
+   * Whether this agent prefers non-streaming (JSON) responses.
+   *
+   * When this method is defined and returns false, the proxy forces
+   * stream=false regardless of the client's body.stream setting.
+   * When undefined or returns true, body.stream is used (defaulting to true).
+   */
+  prefersStreaming?(body: any): boolean
+
+  /**
    * Whether this agent uses passthrough mode for tool execution.
    *
    * In passthrough mode the proxy returns tool_use blocks to the calling

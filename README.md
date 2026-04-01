@@ -60,6 +60,9 @@ Meridian bridges that gap. It runs locally, accepts standard Anthropic API reque
 - **Telemetry dashboard** — real-time performance metrics at `/telemetry`
 - **Cross-proxy resume** — sessions persist to disk and survive restarts
 - **Agent adapter pattern** — extensible architecture for supporting new agent protocols
+- **Token budget tracking** — per-session token usage accounting from streaming and non-streaming responses
+- **Premium subscription detection** — zero-cost SDK probe identifies Max/Team/Enterprise subscriptions for context-aware model selection
+- **Agent-aware model routing** — subagents automatically use base models (200k) instead of extended context (1M), preserving rate limit budget for primary conversations
 
 ## Agent Setup
 
@@ -231,7 +234,8 @@ src/proxy/
 │   └── droid.ts           ← Droid (Factory AI) adapter
 ├── query.ts               ← SDK query options builder
 ├── errors.ts              ← Error classification
-├── models.ts              ← Model mapping (sonnet/opus/haiku)
+├── models.ts              ← Model mapping, subscription detection, agent mode routing
+├── rateLimit.ts           ← Token budget tracking, proactive backoff helpers
 ├── tools.ts               ← Tool blocking lists
 ├── messages.ts            ← Content normalization
 ├── session/
@@ -324,15 +328,19 @@ const instance = await startProxyServer({
 await instance.close()
 ```
 
-### Session Header Contract
+### Header Contract
 
-For reliable session tracking, agents should send a session identifier via HTTP header. Without it, the proxy falls back to fingerprint-based matching (hashing the first user message + working directory), which is less reliable.
+For reliable session tracking and agent-aware routing, agents should send headers via HTTP. Without them, the proxy falls back to fingerprint-based matching and treats all requests as primary agents.
 
 | Header | Purpose |
 |--------|---------|
 | `x-opencode-session` | Maps agent conversations to Claude SDK sessions for resume, undo, and compaction |
+| `x-opencode-agent-name` | Agent identifier (e.g. `general`, `explore`, `planner`) — logged for diagnostics |
+| `x-opencode-agent-mode` | `primary` or `subagent` — subagents skip `[1m]` models to save rate limit budget |
 
-The proxy uses this header to maintain conversation continuity across requests. Plugin authors should inject it on every request to `/v1/messages`.
+**Agent mode routing:** When `x-opencode-agent-mode: subagent` is set, Meridian selects the base model variant (`opus`, `sonnet`) instead of the extended context variant (`opus[1m]`, `sonnet[1m]`). This keeps subagent requests within the 200k context window and preserves rate limit budget for the primary conversation that benefits from 1M context.
+
+Plugin authors should inject these headers on every request to `/v1/messages`. See [`examples/opencode-plugin/meridian-agent-mode.ts`](examples/opencode-plugin/meridian-agent-mode.ts) for a reference implementation.
 
 ### Plugin Architecture
 
@@ -359,7 +367,9 @@ A plugin's job is to:
 2. Inject session headers into outgoing requests
 3. Check proxy health (`GET /health`)
 
-See [`examples/opencode-plugin/`](examples/opencode-plugin/) for a reference implementation.
+See [`examples/opencode-plugin/`](examples/opencode-plugin/) for reference implementations:
+- [`claude-max-headers.ts`](examples/opencode-plugin/claude-max-headers.ts) — session tracking headers
+- [`meridian-agent-mode.ts`](examples/opencode-plugin/meridian-agent-mode.ts) — agent mode headers for context-aware model routing
 
 ## Endpoints
 

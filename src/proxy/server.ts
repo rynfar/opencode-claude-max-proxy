@@ -965,6 +965,17 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
                     }
                     eventsForwarded += 1
 
+                    // Passthrough mode: when the model stops for tool_use, end the stream
+                    // immediately so the client can execute the tools and send results back.
+                    // Without this, the SDK continues processing "passthrough" tool results
+                    // internally, wasting tokens and producing incorrect responses.
+                    if (passthrough && eventType === "message_delta" && (event as any).delta?.stop_reason === "tool_use" && streamedToolUseIds.size > 0) {
+                      safeEnqueue(encoder.encode(`event: message_stop\ndata: ${JSON.stringify({type: "message_stop"})}\n\n`), "passthrough_tool_stream_stop")
+                      streamClosed = true
+                      try { controller.close() } catch {}
+                      break
+                    }
+
                     if (eventType === "content_block_delta") {
                       const delta = (event as any).delta
                       if (delta?.type === "text_delta") {

@@ -61,7 +61,7 @@ export function buildQueryOptions(ctx: QueryContext) {
   return {
     prompt,
     options: {
-      maxTurns: passthrough ? 1 : 200,
+      maxTurns: passthrough ? 10 : 200,
       cwd: workingDirectory,
       model,
       pathToClaudeCodeExecutable: claudeExecutable,

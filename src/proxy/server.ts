@@ -1,7 +1,8 @@
 import { Hono } from "hono"
 import { cors } from "hono/cors"
-import { query } from "@anthropic-ai/claude-agent-sdk"
 import type { Context } from "hono"
+import { env, envBool, envInt } from "../env"
+import { Semaphore } from "../utils/semaphore"
 import { DEFAULT_PROXY_CONFIG } from "./types"
 import type { ProxyConfig, ProxyInstance, ProxyServer } from "./types"
 export type { ProxyConfig, ProxyInstance, ProxyServer }
@@ -15,11 +16,12 @@ import { createPassthroughMcpServer, stripMcpPrefix, PASSTHROUGH_MCP_NAME, PASST
 
 import { telemetryStore, diagnosticLog, createTelemetryRoutes, landingHtml } from "../telemetry"
 import type { RequestMetric } from "../telemetry"
-import { classifyError, isStaleSessionError, isRateLimitError } from "./errors"
-import { mapModelToClaudeModel, resolveClaudeExecutableAsync, isClosedControllerError, getClaudeAuthStatusAsync, hasExtendedContext, stripExtendedContext } from "./models"
+import { classifyError } from "./errors"
+import { mapModelToClaudeModel, resolveClaudeExecutableAsync, isClosedControllerError, getClaudeAuthStatusAsync } from "./models"
 import { getLastUserMessage } from "./messages"
 import { detectAdapter } from "./adapters/detect"
-import { buildQueryOptions, type QueryContext } from "./query"
+import { preparePrompt } from "./prepareMessages"
+import { withRetry } from "./retry"
 import { createFileChangeHook, extractFileChangesFromMessages, formatFileChangeSummary, type FileChange } from "./fileChanges"
 import {
   computeLineageHash,
@@ -29,7 +31,7 @@ import {
 } from "./session/lineage"
 // Re-export for backwards compatibility (existing tests import from here)
 
-import { lookupSession, storeSession, clearSessionCache, getMaxSessionsLimit, evictSession } from "./session/cache"
+import { lookupSession, storeSession, clearSessionCache, getMaxSessionsLimit } from "./session/cache"
 // Re-export for backwards compatibility (existing tests import from here)
 export { computeLineageHash, hashMessage, computeMessageHashes }
 export { clearSessionCache, getMaxSessionsLimit }
@@ -48,79 +50,6 @@ export type { LineageResult }
 const exec = promisify(execCallback)
 
 let claudeExecutable = ""
-
-/**
- * Build a prompt from all messages for a fresh (non-resume) session.
- * Used when retrying after a stale session UUID error.
- */
-function buildFreshPrompt(
-  messages: Array<{ role: string; content: any }>,
-  stripCacheControl: (content: any) => any
-): string | AsyncIterable<any> {
-  const MULTIMODAL_TYPES = new Set(["image", "document", "file"])
-  const hasMultimodal = messages.some((m) =>
-    Array.isArray(m.content) && m.content.some((b: any) => MULTIMODAL_TYPES.has(b.type))
-  )
-
-  if (hasMultimodal) {
-    const structured: Array<{ type: "user"; message: { role: string; content: any }; parent_tool_use_id: null }> = []
-    for (const m of messages) {
-      if (m.role === "user") {
-        structured.push({
-          type: "user" as const,
-          message: { role: "user" as const, content: stripCacheControl(m.content) },
-          parent_tool_use_id: null,
-        })
-      } else {
-        let text: string
-        if (typeof m.content === "string") {
-          text = `[Assistant: ${m.content}]`
-        } else if (Array.isArray(m.content)) {
-          text = m.content.map((b: any) => {
-            if (b.type === "text" && b.text) return `[Assistant: ${b.text}]`
-            if (b.type === "tool_use") return `[Tool Use: ${b.name}(${JSON.stringify(b.input)})]`
-            if (b.type === "tool_result") return `[Tool Result: ${typeof b.content === "string" ? b.content : JSON.stringify(b.content)}]`
-            return ""
-          }).filter(Boolean).join("\n")
-        } else {
-          text = `[Assistant: ${String(m.content)}]`
-        }
-        structured.push({
-          type: "user" as const,
-          message: { role: "user" as const, content: text },
-          parent_tool_use_id: null,
-        })
-      }
-    }
-    return (async function* () { for (const msg of structured) yield msg })()
-  }
-
-  return messages
-    .map((m) => {
-      const role = m.role === "assistant" ? "Assistant" : "Human"
-      let content: string
-      if (typeof m.content === "string") {
-        content = m.content
-      } else if (Array.isArray(m.content)) {
-        content = m.content
-          .map((block: any) => {
-            if (block.type === "text" && block.text) return block.text
-            if (block.type === "tool_use") return `[Tool Use: ${block.name}(${JSON.stringify(block.input)})]`
-            if (block.type === "tool_result") return `[Tool Result for ${block.tool_use_id}: ${typeof block.content === "string" ? block.content : JSON.stringify(block.content)}]`
-            if (block.type === "image") return "[Image attached]"
-            if (block.type === "document") return "[Document attached]"
-            if (block.type === "file") return "[File attached]"
-            return ""
-          })
-          .filter(Boolean)
-          .join("\n")
-      } else {
-        content = String(m.content)
-      }
-      return `${role}: ${content}`
-    })
-    .join("\n\n") || ""
-}
 
 export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServer {
   const finalConfig = { ...DEFAULT_PROXY_CONFIG, ...config }
@@ -144,29 +73,8 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
 
   // --- Concurrency Control ---
   // Each request spawns an SDK subprocess (cli.js, ~11MB). Spawning multiple
-  // simultaneously can crash the process. Serialize SDK queries with a queue.
-  const MAX_CONCURRENT_SESSIONS = parseInt((process.env.MERIDIAN_MAX_CONCURRENT ?? process.env.CLAUDE_PROXY_MAX_CONCURRENT) || "10", 10)
-  let activeSessions = 0
-  const sessionQueue: Array<{ resolve: () => void }> = []
-
-  async function acquireSession(): Promise<void> {
-    if (activeSessions < MAX_CONCURRENT_SESSIONS) {
-      activeSessions++
-      return
-    }
-    return new Promise<void>((resolve) => {
-      sessionQueue.push({ resolve })
-    })
-  }
-
-  function releaseSession(): void {
-    activeSessions--
-    const next = sessionQueue.shift()
-    if (next) {
-      activeSessions++
-      next.resolve()
-    }
-  }
+  // simultaneously can crash the process. Serialize SDK queries with a semaphore.
+  const sessionSemaphore = new Semaphore(envInt("MAX_CONCURRENT", 10))
 
   const handleMessages = async (
     c: Context,
@@ -178,12 +86,12 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
       try {
         const body = await c.req.json()
         const authStatus = await getClaudeAuthStatusAsync()
-        let model = mapModelToClaudeModel(body.model || "sonnet", authStatus?.subscriptionType)
+        let model: string = mapModelToClaudeModel(body.model || "sonnet", authStatus?.subscriptionType)
         const adapter = detectAdapter(c)
         // Allow adapter to override streaming preference (e.g. LiteLLM requires non-streaming)
         const adapterStreamPref = adapter.prefersStreaming?.(body)
         const stream = adapterStreamPref !== undefined ? adapterStreamPref : (body.stream ?? true)
-        const workingDirectory = (process.env.MERIDIAN_WORKDIR ?? process.env.CLAUDE_PROXY_WORKDIR) || adapter.extractWorkingDirectory(body) || process.cwd()
+        const workingDirectory = env("WORKDIR") || adapter.extractWorkingDirectory(body) || process.cwd()
 
         // Strip env vars that would cause the SDK subprocess to loop back through
         // the proxy instead of using its native Claude Max auth. Also strip vars
@@ -227,7 +135,7 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
         }).join(" → ")
         const lineageType = lineageResult.type === "diverged" && !cachedSession ? "new" : lineageResult.type
         const msgCount = Array.isArray(body.messages) ? body.messages.length : 0
-        const requestLogLine = `${requestMeta.requestId} model=${model} stream=${stream} tools=${body.tools?.length ?? 0} lineage=${lineageType} session=${resumeSessionId?.slice(0, 8) || "new"}${isUndo && undoRollbackUuid ? ` rollback=${undoRollbackUuid.slice(0, 8)}` : ""} active=${activeSessions}/${MAX_CONCURRENT_SESSIONS} msgCount=${msgCount}`
+        const requestLogLine = `${requestMeta.requestId} model=${model} stream=${stream} tools=${body.tools?.length ?? 0} lineage=${lineageType} session=${resumeSessionId?.slice(0, 8) || "new"}${isUndo && undoRollbackUuid ? ` rollback=${undoRollbackUuid.slice(0, 8)}` : ""} active=${sessionSemaphore.activeCount}/${envInt("MAX_CONCURRENT", 10)} msgCount=${msgCount}`
         console.error(`[PROXY] ${requestLogLine} msgs=${msgSummary}`)
         diagnosticLog.session(`${requestLogLine}`, requestMeta.requestId)
 
@@ -243,7 +151,7 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
       // OpenCode parses the Task tool description; other adapters return empty.
       const sdkAgents = adapter.buildSdkAgents?.(body, adapter.getAllowedMcpTools()) ?? {}
       const validAgentNames = Object.keys(sdkAgents)
-      if ((process.env.MERIDIAN_DEBUG ?? process.env.CLAUDE_PROXY_DEBUG) && validAgentNames.length > 0) {
+      if (envBool("DEBUG") && validAgentNames.length > 0) {
         claudeLog("debug.agents", { names: validAgentNames, count: validAgentNames.length })
       }
       systemContext += adapter.buildSystemContextAddendum?.(body, sdkAgents) ?? ""
@@ -275,116 +183,7 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
         messagesToConvert = allMessages
       }
 
-      // Check if any messages contain multimodal content (images, documents, files)
-      const MULTIMODAL_TYPES = new Set(["image", "document", "file"])
-      const hasMultimodal = messagesToConvert?.some((m: any) =>
-        Array.isArray(m.content) && m.content.some((b: any) => MULTIMODAL_TYPES.has(b.type))
-      )
-
-      // Strip cache_control from content blocks — the SDK manages its own caching
-      // and OpenCode's ttl='1h' blocks conflict with the SDK's ttl='5m' blocks
-      function stripCacheControl(content: any): any {
-        if (!Array.isArray(content)) return content
-        return content.map((block: any) => {
-          if (block.cache_control) {
-            const { cache_control, ...rest } = block
-            return rest
-          }
-          return block
-        })
-      }
-
-      // Build the prompt — either structured (multimodal) or text.
-      // Structured prompts are stored as arrays so they can be replayed on retry.
-      let structuredMessages: Array<{ type: "user"; message: { role: string; content: any }; parent_tool_use_id: null }> | undefined
-      let textPrompt: string | undefined
-
-      if (hasMultimodal) {
-        // Structured messages preserve image/document/file blocks for Claude to see.
-        // On resume, only send user messages (SDK has assistant context already).
-        // On first request, include everything.
-        structuredMessages = []
-
-        if (isResume) {
-          // Resume: only send user messages from the delta (SDK has the rest)
-          for (const m of messagesToConvert) {
-            if (m.role === "user") {
-              structuredMessages.push({
-                type: "user" as const,
-                message: { role: "user" as const, content: stripCacheControl(m.content) },
-                parent_tool_use_id: null,
-              })
-            }
-          }
-        } else {
-          // First request: all messages (system context now passed via appendSystemPrompt)
-          for (const m of messagesToConvert) {
-            if (m.role === "user") {
-              structuredMessages.push({
-                type: "user" as const,
-                message: { role: "user" as const, content: stripCacheControl(m.content) },
-                parent_tool_use_id: null,
-              })
-            } else {
-              // Convert assistant messages to text summaries
-              let text: string
-              if (typeof m.content === "string") {
-                text = `[Assistant: ${m.content}]`
-              } else if (Array.isArray(m.content)) {
-                text = m.content.map((b: any) => {
-                  if (b.type === "text" && b.text) return `[Assistant: ${b.text}]`
-                  if (b.type === "tool_use") return `[Tool Use: ${b.name}(${JSON.stringify(b.input)})]`
-                  if (b.type === "tool_result") return `[Tool Result: ${typeof b.content === "string" ? b.content : JSON.stringify(b.content)}]`
-                  return ""
-                }).filter(Boolean).join("\n")
-              } else {
-                text = `[Assistant: ${String(m.content)}]`
-              }
-              structuredMessages.push({
-                type: "user" as const,
-                message: { role: "user" as const, content: text },
-                parent_tool_use_id: null,
-              })
-            }
-          }
-        }
-      } else {
-        // Text prompt — convert messages to string
-        textPrompt = messagesToConvert
-          ?.map((m: { role: string; content: string | Array<{ type: string; text?: string; content?: string; tool_use_id?: string; name?: string; input?: unknown; id?: string }> }) => {
-            const role = m.role === "assistant" ? "Assistant" : "Human"
-            let content: string
-            if (typeof m.content === "string") {
-              content = m.content
-            } else if (Array.isArray(m.content)) {
-              content = m.content
-                .map((block: any) => {
-                  if (block.type === "text" && block.text) return block.text
-                  if (block.type === "tool_use") return `[Tool Use: ${block.name}(${JSON.stringify(block.input)})]`
-                  if (block.type === "tool_result") return `[Tool Result for ${block.tool_use_id}: ${typeof block.content === "string" ? block.content : JSON.stringify(block.content)}]`
-                  if (block.type === "image") return "[Image attached]"
-                  if (block.type === "document") return "[Document attached]"
-                  if (block.type === "file") return "[File attached]"
-                  return ""
-                })
-                .filter(Boolean)
-                .join("\n")
-            } else {
-              content = String(m.content)
-            }
-            return `${role}: ${content}`
-          })
-          .join("\n\n") || ""
-      }
-
-      // Create a fresh prompt value — can be called multiple times for retry
-      function makePrompt(): string | AsyncIterable<any> {
-        if (structuredMessages) {
-          const msgs = structuredMessages
-          return (async function* () { for (const msg of msgs) yield msg })()
-        }
-        return textPrompt!
-      }
+      const { makePrompt } = preparePrompt(messagesToConvert, isResume)
 
       // --- Passthrough mode ---
       // When enabled, ALL tool execution is forwarded to OpenCode instead of
@@ -395,7 +194,7 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
       const adapterPassthrough = adapter.usesPassthrough?.()
       const passthrough = adapterPassthrough !== undefined
         ? adapterPassthrough
-        : Boolean((process.env.MERIDIAN_PASSTHROUGH ?? process.env.CLAUDE_PROXY_PASSTHROUGH))
+        : envBool("PASSTHROUGH")
       const capturedToolUses: Array<{ id: string; name: string; input: any }> = []
       const fileChanges: FileChange[] = []
 
@@ -413,7 +212,7 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
       // PostToolUse hook tracks file changes from MCP tools (internal mode only).
       // Catches write, edit, AND bash redirects (>, >>, tee, sed -i).
       const mcpPrefix = `mcp__${adapter.getMcpServerName()}__`
-      const trackFileChanges = !(process.env.MERIDIAN_NO_FILE_CHANGES ?? process.env.CLAUDE_PROXY_NO_FILE_CHANGES)
+      const trackFileChanges = !envBool("NO_FILE_CHANGES")
       const fileChangeHook = trackFileChanges ? createFileChangeHook(fileChanges, mcpPrefix) : undefined
 
       const sdkHooks = passthrough
@@ -470,96 +269,23 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
               claudeExecutable = await resolveClaudeExecutableAsync()
             }
 
-            // Wrap SDK call with transparent retry for recoverable errors.
-            // Both stale-UUID and rate-limit retries happen inside the generator,
-            // so the message-processing loop doesn't need any retry logic.
-            //
-            // Rate-limit retry strategy:
-            //   1. Strip [1m] context (immediate, different model tier)
-            //   2. Backoff retries on base model (1s, 2s — exponential)
-            const MAX_RATE_LIMIT_RETRIES = 2
-            const RATE_LIMIT_BASE_DELAY_MS = 1000
-
-            const response = (async function* () {
-              let rateLimitRetries = 0
-
-              while (true) {
-                // Track whether response content was yielded.
-                // The SDK emits metadata (session_id etc.) before the API call;
-                // only "assistant" messages represent actual response content.
-                let didYieldContent = false
-                try {
-                  for await (const event of query(buildQueryOptions({
-                    prompt: makePrompt(), model, workingDirectory, systemContext, claudeExecutable,
-                    passthrough, stream: false, sdkAgents, passthroughMcp, cleanEnv,
-                    resumeSessionId, isUndo, undoRollbackUuid, sdkHooks, adapter, onStderr,
-                  }))) {
-                    if ((event as any).type === "assistant") {
-                      didYieldContent = true
-                    }
-                    yield event
-                  }
-                  return
-                } catch (error) {
-                  const errMsg = error instanceof Error ? error.message : String(error)
-
-                  // Never retry after response content was yielded — response is committed
-                  if (didYieldContent) throw error
-
-                  // Retry: stale undo UUID — evict session and start fresh (one-shot)
-                  if (isStaleSessionError(error)) {
-                    claudeLog("session.stale_uuid_retry", {
-                      mode: "non_stream",
-                      rollbackUuid: undoRollbackUuid,
-                      resumeSessionId,
-                    })
-                    console.error(`[PROXY] Stale session UUID, evicting and retrying as fresh session`)
-                    evictSession(agentSessionId, workingDirectory, allMessages)
-                    sdkUuidMap.length = 0
-                    for (let i = 0; i < allMessages.length; i++) sdkUuidMap.push(null)
-                    yield* query(buildQueryOptions({
-                      prompt: buildFreshPrompt(allMessages, stripCacheControl),
-                      model, workingDirectory, systemContext, claudeExecutable,
-                      passthrough, stream: false, sdkAgents, passthroughMcp, cleanEnv,
-                      resumeSessionId: undefined, isUndo: false, undoRollbackUuid: undefined, sdkHooks, adapter, onStderr,
-                    }))
-                    return
-                  }
-
-                  // Rate-limit retry: first strip [1m] (free, different tier), then backoff
-                  if (isRateLimitError(errMsg)) {
-                    if (hasExtendedContext(model)) {
-                      const from = model
-                      model = stripExtendedContext(model)
-                      claudeLog("upstream.context_fallback", {
-                        mode: "non_stream",
-                        from,
-                        to: model,
-                        reason: "rate_limit",
-                      })
-                      console.error(`[PROXY] ${requestMeta.requestId} rate-limited on [1m], retrying with ${model}`)
-                      continue
-                    }
-                    if (rateLimitRetries < MAX_RATE_LIMIT_RETRIES) {
-                      rateLimitRetries++
-                      const delay = RATE_LIMIT_BASE_DELAY_MS * Math.pow(2, rateLimitRetries - 1)
-                      claudeLog("upstream.rate_limit_backoff", {
-                        mode: "non_stream",
-                        model,
-                        attempt: rateLimitRetries,
-                        maxAttempts: MAX_RATE_LIMIT_RETRIES,
-                        delayMs: delay,
-                      })
-                      console.error(`[PROXY] ${requestMeta.requestId} rate-limited on ${model}, retry ${rateLimitRetries}/${MAX_RATE_LIMIT_RETRIES} in ${delay}ms`)
-                      await new Promise(r => setTimeout(r, delay))
-                      continue
-                    }
-                  }
-
-                  throw error
-                }
-              }
-            })()
+            const response = withRetry({
+              mode: "non_stream",
+              requestId: requestMeta.requestId,
+              getModel: () => model,
+              setModel: (m) => { model = m },
+              buildOpts: (overrides) => ({
+                prompt: makePrompt(), model, workingDirectory, systemContext, claudeExecutable,
+                passthrough, stream: false, sdkAgents, passthroughMcp, cleanEnv,
+                resumeSessionId, isUndo, undoRollbackUuid, sdkHooks, adapter, onStderr,
+                ...overrides,
+              }),
+              allMessages,
+              agentSessionId,
+              workingDirectory,
+              sdkUuidMap,
+              isCommitted: (event) => (event as any).type === "assistant",
+            })
 
             for await (const message of response) {
               // Capture session ID from SDK messages
@@ -767,94 +493,23 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
 
             try {
               let currentSessionId: string | undefined
-              // Same transparent retry wrapper as the non-streaming path.
-              // Rate-limit retry strategy:
-              //   1. Strip [1m] context (immediate, different model tier)
-              //   2. Backoff retries on base model (1s, 2s — exponential)
-              const MAX_RATE_LIMIT_RETRIES = 2
-              const RATE_LIMIT_BASE_DELAY_MS = 1000
-
-              const response = (async function* () {
-                let rateLimitRetries = 0
-
-                while (true) {
-                  // Track whether client-visible SSE events were yielded.
-                  // The SDK emits metadata events (session_id, internal routing)
-                  // before the API call — those are NOT client-visible and must
-                  // not prevent retry. Only stream_event types become SSE output.
-                  let didYieldClientEvent = false
-                  try {
-                    for await (const event of query(buildQueryOptions({
-                      prompt: makePrompt(), model, workingDirectory, systemContext, claudeExecutable,
-                      passthrough, stream: true, sdkAgents, passthroughMcp, cleanEnv,
-                      resumeSessionId, isUndo, undoRollbackUuid, sdkHooks, adapter, onStderr,
-                    }))) {
-                      if ((event as any).type === "stream_event") {
-                        didYieldClientEvent = true
-                      }
-                      yield event
-                    }
-                    return
-                  } catch (error) {
-                    const errMsg = error instanceof Error ? error.message : String(error)
-
-                    // Never retry after client-visible SSE events — response is committed
-                    if (didYieldClientEvent) throw error
-
-                    // Retry: stale undo UUID — evict and start fresh (one-shot)
-                    if (isStaleSessionError(error)) {
-                      claudeLog("session.stale_uuid_retry", {
-                        mode: "stream",
-                        rollbackUuid: undoRollbackUuid,
-                        resumeSessionId,
-                      })
-                      console.error(`[PROXY] Stale session UUID, evicting and retrying as fresh session`)
-                      evictSession(agentSessionId, workingDirectory, allMessages)
-                      sdkUuidMap.length = 0
-                      for (let i = 0; i < allMessages.length; i++) sdkUuidMap.push(null)
-                      yield* query(buildQueryOptions({
-                        prompt: buildFreshPrompt(allMessages, stripCacheControl),
-                        model, workingDirectory, systemContext, claudeExecutable,
-                        passthrough, stream: true, sdkAgents, passthroughMcp, cleanEnv,
-                        resumeSessionId: undefined, isUndo: false, undoRollbackUuid: undefined, sdkHooks, adapter, onStderr,
-                      }))
-                      return
-                    }
-
-                    // Rate-limit retry: first strip [1m] (free, different tier), then backoff
-                    if (isRateLimitError(errMsg)) {
-                      if (hasExtendedContext(model)) {
-                        const from = model
-                        model = stripExtendedContext(model)
-                        claudeLog("upstream.context_fallback", {
-                          mode: "stream",
-                          from,
-                          to: model,
-                          reason: "rate_limit",
-                        })
-                        console.error(`[PROXY] ${requestMeta.requestId} rate-limited on [1m], retrying with ${model}`)
-                        continue
-                      }
-                      if (rateLimitRetries < MAX_RATE_LIMIT_RETRIES) {
-                        rateLimitRetries++
-                        const delay = RATE_LIMIT_BASE_DELAY_MS * Math.pow(2, rateLimitRetries - 1)
-                        claudeLog("upstream.rate_limit_backoff", {
-                          mode: "stream",
-                          model,
-                          attempt: rateLimitRetries,
-                          maxAttempts: MAX_RATE_LIMIT_RETRIES,
-                          delayMs: delay,
-                        })
-                        console.error(`[PROXY] ${requestMeta.requestId} rate-limited on ${model}, retry ${rateLimitRetries}/${MAX_RATE_LIMIT_RETRIES} in ${delay}ms`)
-                        await new Promise(r => setTimeout(r, delay))
-                        continue
-                      }
-                    }
-
-                    throw error
-                  }
-                }
-              })()
+              const response = withRetry({
+                mode: "stream",
+                requestId: requestMeta.requestId,
+                getModel: () => model,
+                setModel: (m) => { model = m },
+                buildOpts: (overrides) => ({
+                  prompt: makePrompt(), model, workingDirectory, systemContext, claudeExecutable,
+                  passthrough, stream: true, sdkAgents, passthroughMcp, cleanEnv,
+                  resumeSessionId, isUndo, undoRollbackUuid, sdkHooks, adapter, onStderr,
+                  ...overrides,
+                }),
+                allMessages,
+                agentSessionId,
+                workingDirectory,
+                sdkUuidMap,
+                isCommitted: (event) => (event as any).type === "stream_event",
+              })
 
               const heartbeat = setInterval(() => {
                 heartbeatCount += 1
@@ -1257,7 +912,7 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
           requestModel: undefined,
           mode: "non-stream",
           isResume: false,
-          isPassthrough: Boolean((process.env.MERIDIAN_PASSTHROUGH ?? process.env.CLAUDE_PROXY_PASSTHROUGH)),
+          isPassthrough: envBool("PASSTHROUGH"),
           lineageType: undefined,
           messageCount: undefined,
           sdkSessionId: undefined,
@@ -1284,12 +939,12 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
     const requestId = c.req.header("x-request-id") || randomUUID()
     const queueEnteredAt = Date.now()
     claudeLog("request.enter", { requestId, endpoint })
-    await acquireSession()
+    await sessionSemaphore.acquire()
     const queueStartedAt = Date.now()
     try {
       return await handleMessages(c, { requestId, endpoint, queueEnteredAt, queueStartedAt })
     } finally {
-      releaseSession()
+      sessionSemaphore.release()
     }
   }
 
@@ -1307,7 +962,7 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
         return c.json({
           status: "degraded",
           error: "Could not verify auth status",
-          mode: (process.env.MERIDIAN_PASSTHROUGH ?? process.env.CLAUDE_PROXY_PASSTHROUGH) ? "passthrough" : "internal",
+          mode: envBool("PASSTHROUGH") ? "passthrough" : "internal",
         })
       }
       if (!auth.loggedIn) {
@@ -1324,13 +979,13 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
           email: auth.email,
           subscriptionType: auth.subscriptionType,
         },
-        mode: (process.env.MERIDIAN_PASSTHROUGH ?? process.env.CLAUDE_PROXY_PASSTHROUGH) ? "passthrough" : "internal",
+        mode: envBool("PASSTHROUGH") ? "passthrough" : "internal",
       })
     } catch {
       return c.json({
         status: "degraded",
         error: "Could not verify auth status",
-        mode: (process.env.MERIDIAN_PASSTHROUGH ?? process.env.CLAUDE_PROXY_PASSTHROUGH) ? "passthrough" : "internal",
+        mode: envBool("PASSTHROUGH") ? "passthrough" : "internal",
       })
     }
   })

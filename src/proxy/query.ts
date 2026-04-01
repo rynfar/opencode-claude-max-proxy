@@ -63,6 +63,11 @@ export function buildQueryOptions(ctx: QueryContext) {
   return {
     prompt,
     options: {
+      // Force Node as the executable. The claude-agent-sdk auto-detects Bun
+      // via process.versions.bun and defaults to spawning `bun cli.js`.
+      // Hosts like OpenCode embed Bun, so the check fires even when `bun`
+      // is not in PATH — causing subprocess spawns to fail.
+      executable: "node" as const,
       // NOTE: agent-specific (passthrough mode) — 2 turns are required, not 1.
       // Turn 1: model generates tool_use blocks (captured by PreToolUse hook).
       // Turn 2: SDK processes the blocked-tool handoff before the generator

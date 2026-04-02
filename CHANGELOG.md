@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.24.4](https://github.com/rynfar/meridian/compare/v1.24.3...v1.24.4) (2026-04-02)
+
+
+### Bug Fixes
+
+* eliminate proxy-async-ops flaky test in CI ([4592dfd](https://github.com/rynfar/meridian/commit/4592dfda724799a7a21a4db34c8e0c529ced6717))
+* surface MERIDIAN_SONNET_MODEL hint on 1m rate limit errors ([9d4611c](https://github.com/rynfar/meridian/commit/9d4611c6b7198241cad406aebaa91a7148738e78))
+
 ## [1.24.3](https://github.com/rynfar/meridian/compare/v1.24.2...v1.24.3) (2026-04-02)
 
 

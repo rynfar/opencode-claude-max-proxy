@@ -15,6 +15,15 @@ export interface ClassifiedError {
 export function classifyError(errMsg: string): ClassifiedError {
   const lower = errMsg.toLowerCase()
 
+  // Expired OAuth token (more specific than the generic auth check below)
+  if (lower.includes("oauth token has expired") || lower.includes("not logged in")) {
+    return {
+      status: 401,
+      type: "authentication_error",
+      message: "Claude OAuth token has expired and could not be refreshed automatically. Run 'claude login' in your terminal to re-authenticate."
+    }
+  }
+
   // Authentication failures
   if (lower.includes("401") || lower.includes("authentication") || lower.includes("invalid auth") || lower.includes("credentials")) {
     return {
@@ -111,6 +120,20 @@ export function classifyError(errMsg: string): ClassifiedError {
     type: "api_error",
     message: errMsg || "Unknown error"
   }
+}
+
+/**
+ * Detect errors caused by an expired or missing OAuth access token.
+ * Triggers an inline token refresh + retry in server.ts.
+ *
+ * Two distinct messages from the Claude Code CLI:
+ *   - "OAuth token has expired" — CLI sent the token, Anthropic API rejected it
+ *   - "Not logged in"           — CLI checked expiresAt locally and refused to try
+ * Both are resolved by refreshing the token.
+ */
+export function isExpiredTokenError(errMsg: string): boolean {
+  const lower = errMsg.toLowerCase()
+  return lower.includes("oauth token has expired") || lower.includes("not logged in")
 }
 
 /**

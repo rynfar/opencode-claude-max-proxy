@@ -75,10 +75,13 @@ kill $(lsof -ti :3456)
 | FC4 | [File Changes: Read-only (no summary)](#fc4-file-changes-read-only-no-summary) | Read-only operations produce no "Files changed" section | 2026-03-30 |
 | FC5 | [File Changes: Multiple ops](#fc5-file-changes-multiple-ops) | Multiple writes + edits listed in a single summary | 2026-03-30 |
 | FC6 | [File Changes: Multiple ops (stream)](#fc6-file-changes-multiple-ops-stream) | Multiple file changes emitted as a text block in SSE stream | 2026-03-30 |
+| E22 | [OAuth Token Refresh](#e22-oauth-token-refresh) | Expired access token auto-refreshed inline; request succeeds without manual `claude login` | 2026-04-02 |
 
 ---
 
 ## Conventions
+
+**Model selection.** Tests use `claude-haiku-4-5-20251001` by default — it's the cheapest Claude Max tier and sufficient for verifying proxy behavior. Only use sonnet or opus when the test genuinely requires stronger reasoning (E3, E10: real coding tasks via opencode) or is explicitly testing model routing (E14, C4).
 
 **Proxy log verification.** Most tests check proxy stderr for structured log lines:
 ```
@@ -110,7 +113,7 @@ curl -s http://127.0.0.1:3456/v1/messages \
   -H "x-api-key: dummy" \
   -H "x-opencode-session: e2e-basic-001" \
   -d '{
-    "model": "claude-sonnet-4-5-20250514",
+    "model": "claude-haiku-4-5-20251001",
     "max_tokens": 50,
     "stream": false,
     "messages": [{"role": "user", "content": "Respond with exactly: E2E_OK"}]
@@ -135,7 +138,7 @@ curl -sN http://127.0.0.1:3456/v1/messages \
   -H "x-api-key: dummy" \
   -H "x-opencode-session: e2e-stream-001" \
   -d '{
-    "model": "claude-sonnet-4-5-20250514",
+    "model": "claude-haiku-4-5-20251001",
     "max_tokens": 50,
     "stream": true,
     "messages": [{"role": "user", "content": "Say hello in one word"}]
@@ -196,7 +199,7 @@ curl -s http://127.0.0.1:3456/v1/messages \
   -H "x-api-key: dummy" \
   -H "x-opencode-session: e2e-cont-001" \
   -d '{
-    "model": "claude-sonnet-4-5-20250514",
+    "model": "claude-haiku-4-5-20251001",
     "max_tokens": 100,
     "stream": false,
     "messages": [{"role": "user", "content": "Remember: DELTA_99"}]
@@ -208,7 +211,7 @@ curl -s http://127.0.0.1:3456/v1/messages \
   -H "x-api-key: dummy" \
   -H "x-opencode-session: e2e-cont-001" \
   -d '{
-    "model": "claude-sonnet-4-5-20250514",
+    "model": "claude-haiku-4-5-20251001",
     "max_tokens": 100,
     "stream": false,
     "messages": [
@@ -238,7 +241,7 @@ curl -s http://127.0.0.1:3456/v1/messages \
   -H "x-api-key: dummy" \
   -H "x-opencode-session: e2e-cont-001" \
   -d '{
-    "model": "claude-sonnet-4-5-20250514",
+    "model": "claude-haiku-4-5-20251001",
     "max_tokens": 100,
     "stream": false,
     "messages": [
@@ -267,7 +270,7 @@ curl -s http://127.0.0.1:3456/v1/messages \
   -H "x-api-key: dummy" \
   -H "x-opencode-session: e2e-compact-001" \
   -d '{
-    "model": "claude-sonnet-4-5-20250514",
+    "model": "claude-haiku-4-5-20251001",
     "max_tokens": 50,
     "stream": false,
     "messages": [
@@ -287,7 +290,7 @@ curl -s http://127.0.0.1:3456/v1/messages \
   -H "x-api-key: dummy" \
   -H "x-opencode-session: e2e-compact-001" \
   -d '{
-    "model": "claude-sonnet-4-5-20250514",
+    "model": "claude-haiku-4-5-20251001",
     "max_tokens": 50,
     "stream": false,
     "messages": [
@@ -323,7 +326,7 @@ curl -s http://127.0.0.1:3456/v1/messages \
   -H "x-api-key: dummy" \
   -H "x-opencode-session: e2e-compact-001" \
   -d '{
-    "model": "claude-sonnet-4-5-20250514",
+    "model": "claude-haiku-4-5-20251001",
     "max_tokens": 50,
     "stream": false,
     "messages": [
@@ -350,7 +353,7 @@ curl -s http://127.0.0.1:3456/v1/messages \
   -H "x-api-key: dummy" \
   -H "x-opencode-session: e2e-persist-001" \
   -d '{
-    "model": "claude-sonnet-4-5-20250514",
+    "model": "claude-haiku-4-5-20251001",
     "max_tokens": 50,
     "stream": false,
     "messages": [{"role": "user", "content": "Remember: PHOENIX_42"}]
@@ -370,7 +373,7 @@ curl -s http://127.0.0.1:3456/v1/messages \
   -H "x-api-key: dummy" \
   -H "x-opencode-session: e2e-persist-001" \
   -d '{
-    "model": "claude-sonnet-4-5-20250514",
+    "model": "claude-haiku-4-5-20251001",
     "max_tokens": 100,
     "stream": false,
     "messages": [
@@ -398,7 +401,7 @@ curl -s http://127.0.0.1:3456/v1/messages \
   -H "Content-Type: application/json" \
   -H "x-api-key: dummy" \
   -d '{
-    "model": "claude-sonnet-4-5-20250514",
+    "model": "claude-haiku-4-5-20251001",
     "max_tokens": 50,
     "stream": false,
     "messages": [{"role": "user", "content": "Unique fingerprint test message 98765"}]
@@ -409,7 +412,7 @@ curl -s http://127.0.0.1:3456/v1/messages \
   -H "Content-Type: application/json" \
   -H "x-api-key: dummy" \
   -d '{
-    "model": "claude-sonnet-4-5-20250514",
+    "model": "claude-haiku-4-5-20251001",
     "max_tokens": 50,
     "stream": false,
     "messages": [
@@ -526,7 +529,7 @@ for i in 1 2 3; do
     -H "x-api-key: dummy" \
     -H "x-opencode-session: e2e-concurrent-$i" \
     -d "{
-      \"model\": \"claude-sonnet-4-5-20250514\",
+      \"model\": \"claude-haiku-4-5-20251001\",
       \"max_tokens\": 30,
       \"stream\": false,
       \"messages\": [{\"role\": \"user\", \"content\": \"Say $i\"}]
@@ -583,7 +586,7 @@ curl -s -D /tmp/e2e-headers.txt http://127.0.0.1:3456/v1/messages \
   -H "x-api-key: dummy" \
   -H "x-opencode-session: e2e-nonstream-001" \
   -d '{
-    "model": "claude-sonnet-4-5-20250514",
+    "model": "claude-haiku-4-5-20251001",
     "max_tokens": 50,
     "stream": false,
     "messages": [{"role": "user", "content": "Say exactly: NONSTREAM_OK"}]
@@ -613,7 +616,7 @@ curl -s -w "\n%{http_code}" http://127.0.0.1:3456/v1/messages \
 # Missing messages
 curl -s -w "\n%{http_code}" http://127.0.0.1:3456/v1/messages \
   -H "Content-Type: application/json" -H "x-api-key: dummy" \
-  -d '{"model":"claude-sonnet-4-5-20250514","stream":false}'
+  -d '{"model":"claude-haiku-4-5-20251001","stream":false}'
 
 # Unknown endpoint
 curl -s -w "\n%{http_code}" http://127.0.0.1:3456/v1/nonexistent
@@ -650,7 +653,7 @@ curl -s http://127.0.0.1:3456/v1/messages \
   -H "x-api-key: dummy" \
   -H "x-opencode-session: e2e-passthrough-001" \
   -d '{
-    "model": "claude-sonnet-4-5-20250514",
+    "model": "claude-haiku-4-5-20251001",
     "max_tokens": 200,
     "stream": false,
     "messages": [{"role": "user", "content": "Read the file /tmp/test.txt"}],
@@ -682,7 +685,7 @@ curl -sN http://127.0.0.1:3456/v1/messages \
   -H "x-api-key: dummy" \
   -H "x-opencode-session: e2e-passthrough-stream-001" \
   -d '{
-    "model": "claude-sonnet-4-5-20250514",
+    "model": "claude-haiku-4-5-20251001",
     "max_tokens": 200,
     "stream": true,
     "messages": [{"role": "user", "content": "Read the file /tmp/test.txt"}],
@@ -715,7 +718,7 @@ curl -s http://127.0.0.1:3456/v1/messages \
   -H "x-api-key: dummy" \
   -H "x-opencode-session: e2e-multimodal-001" \
   -d "{
-    \"model\": \"claude-sonnet-4-5-20250514\",
+    \"model\": \"claude-haiku-4-5-20251001\",
     \"max_tokens\": 100,
     \"stream\": false,
     \"messages\": [{
@@ -745,7 +748,7 @@ curl -s http://127.0.0.1:3456/v1/messages \
   -H "x-api-key: dummy" \
   -H "x-opencode-session: e2e-task-001" \
   -d '{
-    "model": "claude-sonnet-4-5-20250514",
+    "model": "claude-haiku-4-5-20251001",
     "max_tokens": 100,
     "stream": false,
     "messages": [{"role": "user", "content": "Just say hello"}],
@@ -789,7 +792,7 @@ ANTHROPIC_API_KEY=should-be-stripped ANTHROPIC_BASE_URL=http://should-be-strippe
   -H "x-api-key: dummy" \
   -H "x-opencode-session: e2e-envstrip-001" \
   -d '{
-    "model": "claude-sonnet-4-5-20250514",
+    "model": "claude-haiku-4-5-20251001",
     "max_tokens": 20,
     "stream": false,
     "messages": [{"role": "user", "content": "Say OK"}]
@@ -823,7 +826,7 @@ for i in 1 2 3 4 5; do
     -H "Content-Type: application/json" \
     -H "x-api-key: dummy" \
     -H "x-opencode-session: e2e-prune-$i" \
-    -d "{\"model\":\"claude-sonnet-4-5-20250514\",\"max_tokens\":10,\"stream\":false,\"messages\":[{\"role\":\"user\",\"content\":\"Session $i\"}]}" > /dev/null
+    -d "{\"model\":\"claude-haiku-4-5-20251001\",\"max_tokens\":10,\"stream\":false,\"messages\":[{\"role\":\"user\",\"content\":\"Session $i\"}]}" > /dev/null
   sleep 1  # ensure distinct timestamps for deterministic eviction
 done
 
@@ -840,6 +843,124 @@ print(f'Entries: {len(d)} (should be <= 3)')
 - Oldest sessions (lowest `lastUsedAt`) were evicted
 
 **After testing, restart proxy in normal mode (no cap).**
+
+---
+
+## E22: OAuth Token Refresh
+
+**Verifies:** When the Claude Code OAuth access token has expired, the proxy detects the 401, refreshes the token automatically, and retries the request — the caller sees a normal successful response.
+
+**Platform note:** The credential store is platform-specific. Run on the platform you want to verify:
+- **macOS** — credentials in Keychain (`/usr/bin/security`)
+- **Linux** — credentials in `~/.claude/.credentials.json`
+
+### macOS
+
+```bash
+# 1. Snapshot current expiry
+python3 -c "
+import subprocess, json
+creds = json.loads(subprocess.check_output(
+    ['/usr/bin/security', 'find-generic-password', '-s', 'Claude Code-credentials',
+     '-a', __import__('os').getlogin(), '-w']).decode())
+print('Current expiresAt:', creds['claudeAiOauth']['expiresAt'])
+"
+
+# 2. Artificially expire the token
+CREDS=$(security find-generic-password -s "Claude Code-credentials" -a "$(whoami)" -w)
+EXPIRED=$(echo "$CREDS" | python3 -c "
+import json, sys
+d = json.loads(sys.stdin.read())
+d['claudeAiOauth']['expiresAt'] = 0   # epoch — definitely expired
+print(json.dumps(d, indent=2))
+")
+security add-generic-password -U -s "Claude Code-credentials" -a "$(whoami)" -w "$EXPIRED"
+echo "Token expired (expiresAt set to 0)"
+
+# 3. Make a request — proxy should refresh inline and succeed
+curl -s http://127.0.0.1:3456/v1/messages \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: dummy" \
+  -H "x-opencode-session: e2e-token-refresh-001" \
+  -d '{
+    "model": "claude-haiku-4-5-20251001",
+    "max_tokens": 20,
+    "stream": false,
+    "messages": [{"role": "user", "content": "Say: REFRESH_OK"}]
+  }'
+
+# 4. Verify token was refreshed
+python3 -c "
+import subprocess, json
+creds = json.loads(subprocess.check_output(
+    ['/usr/bin/security', 'find-generic-password', '-s', 'Claude Code-credentials',
+     '-a', __import__('os').getlogin(), '-w']).decode())
+exp = creds['claudeAiOauth']['expiresAt']
+import time
+print(f'New expiresAt: {exp} ({"VALID" if exp > time.time()*1000 else "STILL EXPIRED"})')
+"
+```
+
+### Linux
+
+```bash
+# 1. Snapshot current expiry
+python3 -c "
+import json, os
+creds = json.loads(open(os.path.expanduser('~/.claude/.credentials.json')).read())
+print('Current expiresAt:', creds['claudeAiOauth']['expiresAt'])
+"
+
+# 2. Artificially expire the token
+python3 -c "
+import json, os
+path = os.path.expanduser('~/.claude/.credentials.json')
+d = json.loads(open(path).read())
+d['claudeAiOauth']['expiresAt'] = 0
+open(path, 'w').write(json.dumps(d, indent=2))
+print('Token expired')
+"
+
+# 3. Make a request
+curl -s http://127.0.0.1:3456/v1/messages \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: dummy" \
+  -H "x-opencode-session: e2e-token-refresh-001" \
+  -d '{
+    "model": "claude-haiku-4-5-20251001",
+    "max_tokens": 20,
+    "stream": false,
+    "messages": [{"role": "user", "content": "Say: REFRESH_OK"}]
+  }'
+
+# 4. Verify token was refreshed
+python3 -c "
+import json, os, time
+path = os.path.expanduser('~/.claude/.credentials.json')
+d = json.loads(open(path).read())
+exp = d['claudeAiOauth']['expiresAt']
+print(f'New expiresAt: {exp} ({\"VALID\" if exp > time.time()*1000 else \"STILL EXPIRED\"})')
+"
+```
+
+**Pass criteria:**
+- Response: `"type": "message"` with text containing `REFRESH_OK` — request succeeded despite starting with an expired token
+- Proxy log: `[PROXY] <id> OAuth token expired — refreshed, retrying` appears before the successful response log line
+- Step 4 expiresAt: `VALID` (in the future — token was refreshed and written back)
+- No `authentication_error` in the response
+
+**What's being tested:** The `isExpiredTokenError()` detection in `errors.ts`, the `refreshOAuthToken()` cross-platform credential read/write in `tokenRefresh.ts`, and the inline retry loop in `server.ts`.
+
+### Bonus: manual refresh endpoint
+
+While the proxy is running with a valid token, you can also verify the `/auth/refresh` endpoint directly:
+
+```bash
+curl -s -X POST http://127.0.0.1:3456/auth/refresh
+# → {"success":true,"message":"OAuth token refreshed successfully"}
+```
+
+**Pass criteria:** `success: true` and the `expiresAt` in the credential store is updated to a new future timestamp.
 
 ---
 
@@ -906,7 +1027,8 @@ Which proxy modules each E2E test exercises:
 | `adapters/crush.ts` | C1, C2, C3, C4, C5 |
 | `adapters/detect.ts` | D1, D2, D3, D6, D7, D9, D10, C1, C5 |
 | *(default adapter — no Cline adapter needed)* | CL1–CL8 |
-| `errors.ts` | E16 |
+| `errors.ts` | E16, E22 |
+| `tokenRefresh.ts` | E22 |
 | `models.ts` | E14 |
 | `messages.ts` | E4, E5, E6 (content normalization for hashing) |
 | `tools.ts` | E3, E17, E19 |
@@ -951,7 +1073,7 @@ with open('$HOME/.factory/settings.json', 'w') as f:
 "
 
 # 3. Verify Droid sees the model
-droid exec --model "custom:claude-sonnet-4-5-20250514" --list-tools 2>&1 | head -3
+droid exec --model "custom:claude-haiku-4-5-20251001" --list-tools 2>&1 | head -3
 # → Available tools for claude-sonnet-4-5-20250514
 
 # After all Droid tests, restore:
@@ -986,7 +1108,7 @@ curl -s http://127.0.0.1:3457/v1/messages \
   -H "x-api-key: dummy" \
   -H "User-Agent: factory-cli/0.89.0" \
   -d '{
-    "model": "claude-sonnet-4-5-20250514",
+    "model": "claude-haiku-4-5-20251001",
     "max_tokens": 50,
     "stream": false,
     "messages": [{"role": "user", "content": "Respond with exactly: DROID_E2E_OK"}]
@@ -1011,7 +1133,7 @@ curl -s http://127.0.0.1:3457/v1/messages \
   -H "x-api-key: dummy" \
   -H "User-Agent: factory-cli/0.89.0" \
   -d '{
-    "model": "claude-sonnet-4-5-20250514",
+    "model": "claude-haiku-4-5-20251001",
     "max_tokens": 200,
     "stream": false,
     "messages": [{"role": "user", "content": "List the current directory. Use the Bash tool."}],
@@ -1046,7 +1168,7 @@ curl -s http://127.0.0.1:3457/v1/messages \
   -H "x-api-key: dummy" \
   -H "x-opencode-session: d3-compat-001" \
   -d '{
-    "model": "claude-sonnet-4-5-20250514",
+    "model": "claude-haiku-4-5-20251001",
     "max_tokens": 30,
     "stream": false,
     "messages": [{"role": "user", "content": "Say: OC_COMPAT_OK"}]
@@ -1058,7 +1180,7 @@ curl -s http://127.0.0.1:3457/v1/messages \
   -H "x-api-key: dummy" \
   -H "User-Agent: opencode/1.0" \
   -d '{
-    "model": "claude-sonnet-4-5-20250514",
+    "model": "claude-haiku-4-5-20251001",
     "max_tokens": 30,
     "stream": false,
     "messages": [{"role": "user", "content": "Say: OC_UA_OK"}]
@@ -1082,7 +1204,7 @@ curl -s http://127.0.0.1:3457/v1/messages \
   -H "x-api-key: dummy" \
   -H "User-Agent: factory-cli/0.89.0" \
   -d '{
-    "model": "claude-sonnet-4-5-20250514",
+    "model": "claude-haiku-4-5-20251001",
     "max_tokens": 30,
     "stream": false,
     "messages": [{
@@ -1114,7 +1236,7 @@ curl -s http://127.0.0.1:3457/v1/messages \
   -H "x-api-key: dummy" \
   -H "User-Agent: factory-cli/0.89.0" \
   -d '{
-    "model": "claude-sonnet-4-5-20250514",
+    "model": "claude-haiku-4-5-20251001",
     "max_tokens": 50,
     "stream": false,
     "messages": [{
@@ -1132,7 +1254,7 @@ curl -s http://127.0.0.1:3457/v1/messages \
   -H "x-api-key: dummy" \
   -H "User-Agent: factory-cli/0.89.0" \
   -d '{
-    "model": "claude-sonnet-4-5-20250514",
+    "model": "claude-haiku-4-5-20251001",
     "max_tokens": 80,
     "stream": false,
     "messages": [
@@ -1160,7 +1282,7 @@ curl -s http://127.0.0.1:3457/v1/messages \
 
 ```bash
 droid exec \
-  --model "custom:claude-sonnet-4-5-20250514" \
+  --model "custom:claude-haiku-4-5-20251001" \
   --skip-permissions-unsafe \
   --cwd /tmp \
   "Reply with exactly: REAL_DROID_OK. Nothing else."
@@ -1186,7 +1308,7 @@ echo "DROID_CANARY_E2E_42" > /tmp/droid-canary.txt
 
 # Droid reads it via proxy
 droid exec \
-  --model "custom:claude-sonnet-4-5-20250514" \
+  --model "custom:claude-haiku-4-5-20251001" \
   --auto medium \
   --cwd /tmp \
   "Read the file /tmp/droid-canary.txt and tell me what it contains. Just the content, nothing else."
@@ -1209,14 +1331,14 @@ rm /tmp/droid-canary.txt
 ```bash
 # Turn 1 — set a secret
 droid exec \
-  --model "custom:claude-sonnet-4-5-20250514" \
+  --model "custom:claude-haiku-4-5-20251001" \
   --skip-permissions-unsafe \
   --cwd /tmp \
   "Remember the code: DROID_SECRET_99. Just say 'noted'."
 
 # Turn 2 — separate exec, no shared history
 droid exec \
-  --model "custom:claude-sonnet-4-5-20250514" \
+  --model "custom:claude-haiku-4-5-20251001" \
   --skip-permissions-unsafe \
   --cwd /tmp \
   "What was the secret code?"
@@ -1242,7 +1364,7 @@ curl -sN http://127.0.0.1:3457/v1/messages \
   -H "x-api-key: dummy" \
   -H "User-Agent: factory-cli/0.89.0" \
   -d '{
-    "model": "claude-sonnet-4-5-20250514",
+    "model": "claude-haiku-4-5-20251001",
     "max_tokens": 50,
     "stream": true,
     "messages": [{"role": "user", "content": "Say: STREAM_DROID_OK"}]
@@ -1269,7 +1391,7 @@ curl -s http://127.0.0.1:3457/v1/messages \
   -H "x-api-key: dummy" \
   -H "x-opencode-session: d10-oc-backcompat-001" \
   -d '{
-    "model": "claude-sonnet-4-5-20250514",
+    "model": "claude-haiku-4-5-20251001",
     "max_tokens": 50,
     "stream": false,
     "messages": [{"role": "user", "content": "Remember: OPENCODE_BACKCOMPAT_55"}]
@@ -1281,7 +1403,7 @@ curl -s http://127.0.0.1:3457/v1/messages \
   -H "x-api-key: dummy" \
   -H "x-opencode-session: d10-oc-backcompat-001" \
   -d '{
-    "model": "claude-sonnet-4-5-20250514",
+    "model": "claude-haiku-4-5-20251001",
     "max_tokens": 80,
     "stream": false,
     "messages": [
@@ -1362,7 +1484,7 @@ Add the `meridian` provider to `~/.config/crush/crush.json`:
 Verify Crush sees the models:
 ```bash
 crush models | grep meridian
-# → meridian/claude-sonnet-4-6
+# → meridian/claude-haiku-4-5-20251001
 # → meridian/claude-opus-4-6
 # → meridian/claude-haiku-4-5-20251001
 ```
@@ -1375,7 +1497,7 @@ crush models | grep meridian
 
 ```bash
 crush run \
-  --model meridian/claude-sonnet-4-6 \
+  --model meridian/claude-haiku-4-5-20251001 \
   --cwd /path/to/your/project \
   --quiet \
   "Respond with exactly: CRUSH_E2E_OK"
@@ -1395,14 +1517,14 @@ crush run \
 ```bash
 # Turn 1: establish session
 crush run \
-  --model meridian/claude-sonnet-4-6 \
+  --model meridian/claude-haiku-4-5-20251001 \
   --cwd /path/to/your/project \
   --quiet \
   "Remember the code: CRUSH_CONT_99. Reply with 'stored'."
 
 # Turn 2: continue that session
 crush run \
-  --model meridian/claude-sonnet-4-6 \
+  --model meridian/claude-haiku-4-5-20251001 \
   --cwd /path/to/your/project \
   --continue \
   --quiet \
@@ -1422,7 +1544,7 @@ crush run \
 
 ```bash
 crush run \
-  --model meridian/claude-sonnet-4-6 \
+  --model meridian/claude-haiku-4-5-20251001 \
   --cwd /path/to/your/project \
   --quiet \
   "Use the ls tool to list the files in the current directory and show me the output"
@@ -1443,7 +1565,7 @@ crush run \
 
 ```bash
 crush run \
-  --model meridian/claude-sonnet-4-6 \
+  --model meridian/claude-haiku-4-5-20251001 \
   --cwd /path/to/project \
   --quiet \
   "Write the text 'CRUSH_WRITE_OK' to /tmp/crush-write-test.txt"
@@ -1495,7 +1617,7 @@ curl -s http://127.0.0.1:3456/v1/messages \
   -H "Content-Type: application/json" \
   -H "x-api-key: dummy" \
   -H "x-opencode-session: c5-oc-001" \
-  -d '{"model":"claude-sonnet-4-5-20250929","max_tokens":20,"stream":false,"messages":[{"role":"user","content":"Say: OC_COEXIST"}]}' \
+  -d '{"model":"claude-haiku-4-5-20251001","max_tokens":20,"stream":false,"messages":[{"role":"user","content":"Say: OC_COEXIST"}]}' \
   | python3 -c "import json,sys; print(json.load(sys.stdin)['content'][0]['text'])"
 
 curl -s http://127.0.0.1:3456/v1/messages \
@@ -1758,7 +1880,7 @@ curl -s http://127.0.0.1:3457/v1/messages \
   -H "x-api-key: dummy" \
   -H "x-opencode-session: e2e-fc-write-001" \
   -d '{
-    "model": "claude-sonnet-4-5-20250514",
+    "model": "claude-haiku-4-5-20251001",
     "max_tokens": 300,
     "stream": false,
     "messages": [{"role": "user", "content": "Write the text FILECHANGE_OK to /tmp/e2e-fc-write.txt. Just write it, nothing else."}]
@@ -1793,7 +1915,7 @@ curl -sN http://127.0.0.1:3457/v1/messages \
   -H "x-api-key: dummy" \
   -H "x-opencode-session: e2e-fc-stream-001" \
   -d '{
-    "model": "claude-sonnet-4-5-20250514",
+    "model": "claude-haiku-4-5-20251001",
     "max_tokens": 300,
     "stream": true,
     "messages": [{"role": "user", "content": "Write the text STREAMFC_OK to /tmp/e2e-fc-stream.txt. Just write it."}]
@@ -1823,7 +1945,7 @@ curl -s http://127.0.0.1:3457/v1/messages \
   -H "x-api-key: dummy" \
   -H "x-opencode-session: e2e-fc-edit-001" \
   -d '{
-    "model": "claude-sonnet-4-5-20250514",
+    "model": "claude-haiku-4-5-20251001",
     "max_tokens": 300,
     "stream": false,
     "messages": [{"role": "user", "content": "Edit /tmp/e2e-fc-edit.js to change hello to world. Do not rewrite the whole file, just edit it."}]
@@ -1857,7 +1979,7 @@ curl -s http://127.0.0.1:3457/v1/messages \
   -H "x-api-key: dummy" \
   -H "x-opencode-session: e2e-fc-readonly-001" \
   -d '{
-    "model": "claude-sonnet-4-5-20250514",
+    "model": "claude-haiku-4-5-20251001",
     "max_tokens": 200,
     "stream": false,
     "messages": [{"role": "user", "content": "Read the file /tmp/e2e-fc-readonly.txt and tell me what it contains. Do not modify it."}]
@@ -1894,7 +2016,7 @@ curl -s http://127.0.0.1:3457/v1/messages \
   -H "x-api-key: dummy" \
   -H "x-opencode-session: e2e-fc-multi-001" \
   -d '{
-    "model": "claude-sonnet-4-5-20250514",
+    "model": "claude-haiku-4-5-20251001",
     "max_tokens": 400,
     "stream": false,
     "messages": [{"role": "user", "content": "Do two things: 1) Write MULTI_A to /tmp/e2e-fc-multi-a.txt. 2) Edit /tmp/e2e-fc-multi-b.txt to change \"original\" to \"modified\". Do both."}]
@@ -1934,7 +2056,7 @@ curl -sN http://127.0.0.1:3457/v1/messages \
   -H "x-api-key: dummy" \
   -H "x-opencode-session: e2e-fc-stream-multi-001" \
   -d '{
-    "model": "claude-sonnet-4-5-20250514",
+    "model": "claude-haiku-4-5-20251001",
     "max_tokens": 400,
     "stream": true,
     "messages": [{"role": "user", "content": "Write FOO to /tmp/e2e-fc-stream-multi-a.txt and BAR to /tmp/e2e-fc-stream-multi-b.txt"}]

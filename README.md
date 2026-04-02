@@ -371,6 +371,7 @@ See [`examples/opencode-plugin/`](examples/opencode-plugin/) for a reference imp
 | `POST /v1/messages` | Anthropic Messages API |
 | `POST /messages` | Alias for `/v1/messages` |
 | `GET /health` | Auth status, subscription type, mode |
+| `POST /auth/refresh` | Manually refresh the OAuth token |
 | `GET /telemetry` | Performance dashboard |
 | `GET /telemetry/requests` | Recent request metrics (JSON) |
 | `GET /telemetry/summary` | Aggregate statistics (JSON) |
@@ -416,6 +417,14 @@ It works with any Claude subscription that supports the Claude Code SDK. Max is 
 
 **What happens if my session expires?**
 OAuth tokens expire roughly every 8 hours. Meridian detects the expiry on the next request, refreshes the token automatically, and retries — so requests continue to work transparently. If the refresh itself fails (e.g. your refresh token has expired after weeks of inactivity), Meridian returns a clear error telling you to run `claude login`.
+
+**Can I trigger a refresh manually?**
+Yes — hit the `/auth/refresh` endpoint while the proxy is running:
+```bash
+curl -s -X POST http://127.0.0.1:3456/auth/refresh | jq
+# {"success":true,"message":"OAuth token refreshed successfully"}
+```
+Useful for health monitoring setups where you want to pre-emptively refresh before a long idle period.
 
 ## Contributing
 

@@ -270,6 +270,13 @@ describe("isExpiredTokenError", () => {
     expect(isExpiredTokenError("OAUTH TOKEN HAS EXPIRED")).toBe(true)
   })
 
+  it("detects the 'Not logged in' message from local expiry check", async () => {
+    const { isExpiredTokenError } = await import("../proxy/errors")
+    expect(isExpiredTokenError(
+      "Claude Code returned an error result: Not logged in \u00b7 Please run /login"
+    )).toBe(true)
+  })
+
   it("returns false for unrelated auth errors", async () => {
     const { isExpiredTokenError } = await import("../proxy/errors")
     expect(isExpiredTokenError("authentication failed")).toBe(false)

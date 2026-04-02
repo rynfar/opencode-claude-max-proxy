@@ -951,6 +951,17 @@ print(f'New expiresAt: {exp} ({\"VALID\" if exp > time.time()*1000 else \"STILL 
 
 **What's being tested:** The `isExpiredTokenError()` detection in `errors.ts`, the `refreshOAuthToken()` cross-platform credential read/write in `tokenRefresh.ts`, and the inline retry loop in `server.ts`.
 
+### Bonus: manual refresh endpoint
+
+While the proxy is running with a valid token, you can also verify the `/auth/refresh` endpoint directly:
+
+```bash
+curl -s -X POST http://127.0.0.1:3456/auth/refresh
+# → {"success":true,"message":"OAuth token refreshed successfully"}
+```
+
+**Pass criteria:** `success: true` and the `expiresAt` in the credential store is updated to a new future timestamp.
+
 ---
 
 ## Adding New E2E Tests

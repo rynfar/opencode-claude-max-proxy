@@ -1392,6 +1392,17 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
     }
   })
 
+  app.post("/auth/refresh", async (c) => {
+    const success = await refreshOAuthToken()
+    if (success) {
+      return c.json({ success: true, message: "OAuth token refreshed successfully" })
+    }
+    return c.json(
+      { success: false, message: "Token refresh failed. If the problem persists, run 'claude login'." },
+      500
+    )
+  })
+
   // Catch-all: log unhandled requests
   app.all("*", (c) => {
     console.error(`[PROXY] UNHANDLED ${c.req.method} ${c.req.url}`)

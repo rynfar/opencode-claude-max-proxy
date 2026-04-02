@@ -53,6 +53,28 @@ export interface CredentialStore {
 // ---------------------------------------------------------------------------
 // macOS Keychain backend
 // ---------------------------------------------------------------------------
+//
+// Claude Code stores credentials as hex-encoded JSON in the Keychain after
+// `claude login`. Older installs may store raw JSON. We detect on read and
+// preserve the original encoding on write so Claude Code can always read back
+// what we write.
+
+function parseKeychainValue(raw: string): { credentials: CredentialsFile; wasHex: boolean } | null {
+  const trimmed = raw.trim()
+  // Try raw JSON first
+  try {
+    return { credentials: JSON.parse(trimmed) as CredentialsFile, wasHex: false }
+  } catch {}
+  // Try hex-decoded JSON (Claude Code's format after `claude login`)
+  try {
+    const decoded = Buffer.from(trimmed, "hex").toString("utf-8")
+    return { credentials: JSON.parse(decoded) as CredentialsFile, wasHex: true }
+  } catch {}
+  return null
+}
+
+// Track encoding format across read → write within the same refresh call.
+let keychainWasHex = false
 
 const macosStore: CredentialStore = {
   async read() {
@@ -62,7 +84,10 @@ const macosStore: CredentialStore = {
         ["find-generic-password", "-s", KEYCHAIN_SERVICE, "-a", userInfo().username, "-w"],
         { timeout: 5000 }
       )
-      return JSON.parse(stdout.trim()) as CredentialsFile
+      const parsed = parseKeychainValue(stdout)
+      if (!parsed) throw new Error("Could not parse keychain value as JSON or hex-encoded JSON")
+      keychainWasHex = parsed.wasHex
+      return parsed.credentials
     } catch (err) {
       claudeLog("token_refresh.keychain_read_failed", { error: String(err) })
       return null
@@ -71,11 +96,13 @@ const macosStore: CredentialStore = {
 
   async write(credentials) {
     const json = JSON.stringify(credentials, null, 2)
+    // Write back in the same encoding Claude Code expects — hex after `claude login`.
+    const value = keychainWasHex ? Buffer.from(json).toString("hex") : json
     try {
-      // Pass JSON directly as argument — no shell interpolation, no escaping.
+      // Pass value directly as argument — no shell interpolation, no escaping.
       await execFile(
         "/usr/bin/security",
-        ["add-generic-password", "-U", "-s", KEYCHAIN_SERVICE, "-a", userInfo().username, "-w", json],
+        ["add-generic-password", "-U", "-s", KEYCHAIN_SERVICE, "-a", userInfo().username, "-w", value],
         { timeout: 5000 }
       )
       return true

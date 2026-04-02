@@ -17,7 +17,7 @@ import { createPassthroughMcpServer, stripMcpPrefix, PASSTHROUGH_MCP_NAME, PASST
 
 import { telemetryStore, diagnosticLog, createTelemetryRoutes, landingHtml } from "../telemetry"
 import type { RequestMetric } from "../telemetry"
-import { classifyError, isStaleSessionError, isRateLimitError } from "./errors"
+import { classifyError, isStaleSessionError, isRateLimitError, isExtraUsageRequiredError } from "./errors"
 import { mapModelToClaudeModel, resolveClaudeExecutableAsync, isClosedControllerError, getClaudeAuthStatusAsync, hasExtendedContext, stripExtendedContext } from "./models"
 import { getLastUserMessage } from "./messages"
 import { detectAdapter } from "./adapters/detect"
@@ -528,6 +528,20 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
                     return
                   }
 
+                  // Extra Usage required: strip [1m] immediately (no backoff needed)
+                  if (isExtraUsageRequiredError(errMsg) && hasExtendedContext(model)) {
+                    const from = model
+                    model = stripExtendedContext(model)
+                    claudeLog("upstream.context_fallback", {
+                      mode: "non_stream",
+                      from,
+                      to: model,
+                      reason: "extra_usage_required",
+                    })
+                    console.error(`[PROXY] ${requestMeta.requestId} extra usage required for [1m], falling back to ${model}`)
+                    continue
+                  }
+
                   // Rate-limit retry: first strip [1m] (free, different tier), then backoff
                   if (isRateLimitError(errMsg)) {
                     if (hasExtendedContext(model)) {
@@ -821,6 +835,20 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
                         resumeSessionId: undefined, isUndo: false, undoRollbackUuid: undefined, sdkHooks, adapter, onStderr,
                       }))
                       return
+                    }
+
+                    // Extra Usage required: strip [1m] immediately (no backoff needed)
+                    if (isExtraUsageRequiredError(errMsg) && hasExtendedContext(model)) {
+                      const from = model
+                      model = stripExtendedContext(model)
+                      claudeLog("upstream.context_fallback", {
+                        mode: "stream",
+                        from,
+                        to: model,
+                        reason: "extra_usage_required",
+                      })
+                      console.error(`[PROXY] ${requestMeta.requestId} extra usage required for [1m], falling back to ${model}`)
+                      continue
                     }
 
                     // Rate-limit retry: first strip [1m] (free, different tier), then backoff

@@ -2,7 +2,7 @@
  * Unit tests for classifyError — pure function, no mocks needed.
  */
 import { describe, it, expect } from "bun:test"
-import { classifyError, isStaleSessionError } from "../proxy/errors"
+import { classifyError, isStaleSessionError, isExtraUsageRequiredError } from "../proxy/errors"
 
 describe("classifyError", () => {
   describe("authentication errors", () => {
@@ -166,6 +166,31 @@ describe("classifyError", () => {
       expect(isStaleSessionError("No message found with message.uuid")).toBe(false)
       expect(isStaleSessionError(null)).toBe(false)
       expect(isStaleSessionError(undefined)).toBe(false)
+    })
+  })
+
+  describe("extra usage required", () => {
+    it("detects the exact error from Claude SDK", () => {
+      expect(isExtraUsageRequiredError(
+        "Claude Code returned an error result: API Error: Extra usage is required for 1M context · enable extra usage at claude.ai/settings/usage, or use --model to switch"
+      )).toBe(true)
+    })
+
+    it("detects lowercase variant", () => {
+      expect(isExtraUsageRequiredError("extra usage is required for 1m context")).toBe(true)
+    })
+
+    it("returns false for unrelated errors", () => {
+      expect(isExtraUsageRequiredError("rate limit exceeded")).toBe(false)
+      expect(isExtraUsageRequiredError("authentication failed")).toBe(false)
+    })
+
+    it("returns false when only 'extra usage' but no '1m'", () => {
+      expect(isExtraUsageRequiredError("extra usage enabled")).toBe(false)
+    })
+
+    it("returns false when only '1m' but no 'extra usage'", () => {
+      expect(isExtraUsageRequiredError("using 1m context window")).toBe(false)
     })
   })
 

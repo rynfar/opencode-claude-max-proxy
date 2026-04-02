@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.24.3](https://github.com/rynfar/meridian/compare/v1.24.2...v1.24.3) (2026-04-02)
+
+
+### Bug Fixes
+
+* auto-refresh expired OAuth token inline on 401 ([#230](https://github.com/rynfar/meridian/issues/230)) ([fd377a3](https://github.com/rynfar/meridian/commit/fd377a37257146b9bede11b07b64d10c5727fc9c))
+
 ## [1.24.2](https://github.com/rynfar/meridian/compare/v1.24.1...v1.24.2) (2026-04-02)
 
 

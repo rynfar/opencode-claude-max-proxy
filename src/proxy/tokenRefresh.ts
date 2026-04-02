@@ -1,19 +1,14 @@
 /**
- * OAuth token refresh for Claude Code credentials.
- *
- * Uses a stamp file to rate-limit refresh attempts: only refreshes once per
- * REFRESH_THRESHOLD_MS (6 hours). The stamp file is only updated on a
- * successful refresh so that failures cause a retry on the next request.
+ * Manual OAuth token refresh for Claude Code credentials.
+ * Refreshes the access token using the refresh token from ~/.claude/.credentials.json.
+ * Returns true on success, false on any error (credentials read, network, parse, write).
  */
 
-import { readFileSync, writeFileSync, statSync, utimesSync } from "fs"
-import { tmpdir, homedir } from "os"
-import { join } from "path"
+import { readFileSync, writeFileSync } from "fs"
+import { homedir } from "os"
 import { claudeLog } from "../logger"
 
-const STAMP_FILE = join(tmpdir(), "meridian-token-refresh")
-const CREDENTIALS_FILE = join(homedir(), ".claude", ".credentials.json")
-const REFRESH_THRESHOLD_MS = 6 * 60 * 60 * 1000 // 6 hours
+const CREDENTIALS_FILE = `${homedir()}/.claude/.credentials.json`
 const OAUTH_TOKEN_URL = "https://platform.claude.com/v1/oauth/token"
 const OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 
@@ -38,39 +33,10 @@ interface OAuthTokenResponse {
   scope?: string
 }
 
-export function stampFileAgeMs(): number {
-  try {
-    const stat = statSync(STAMP_FILE)
-    return Date.now() - stat.mtimeMs
-  } catch {
-    return Infinity
-  }
-}
-
-function readCredentials(): CredentialsFile {
-  const raw = readFileSync(CREDENTIALS_FILE, "utf-8")
-  return JSON.parse(raw) as CredentialsFile
-}
-
-function writeCredentials(updated: CredentialsFile): void {
-  const tmp = CREDENTIALS_FILE + ".tmp"
-  writeFileSync(tmp, JSON.stringify(updated, null, 2), "utf-8")
-  // Atomic rename — writeFileSync to final path directly risks partial writes
-  writeFileSync(CREDENTIALS_FILE, JSON.stringify(updated, null, 2), "utf-8")
-}
-
-function touchStampFile(): void {
-  try {
-    writeFileSync(STAMP_FILE, "", "utf-8")
-  } catch (err) {
-    claudeLog("token_refresh.stamp_write_failed", { error: String(err) })
-  }
-}
-
 export async function refreshOAuthToken(): Promise<boolean> {
   let credentials: CredentialsFile
   try {
-    credentials = readCredentials()
+    credentials = JSON.parse(readFileSync(CREDENTIALS_FILE, "utf-8"))
   } catch (err) {
     claudeLog("token_refresh.credentials_read_failed", { error: String(err) })
     return false
@@ -126,27 +92,12 @@ export async function refreshOAuthToken(): Promise<boolean> {
   }
 
   try {
-    writeCredentials(credentials)
+    writeFileSync(CREDENTIALS_FILE, JSON.stringify(credentials, null, 2), "utf-8")
   } catch (err) {
     claudeLog("token_refresh.credentials_write_failed", { error: String(err) })
     return false
   }
 
-  touchStampFile()
   claudeLog("token_refresh.success", { expiresAt })
   return true
-}
-
-let refreshInProgress = false
-
-export async function refreshTokenIfNeeded(): Promise<void> {
-  if (stampFileAgeMs() < REFRESH_THRESHOLD_MS) return
-  if (refreshInProgress) return
-
-  refreshInProgress = true
-  try {
-    await refreshOAuthToken()
-  } finally {
-    refreshInProgress = false
-  }
 }

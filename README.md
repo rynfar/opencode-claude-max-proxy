@@ -417,6 +417,32 @@ It works with any Claude subscription that supports the Claude Code SDK. Max is 
 **What happens if my session expires?**
 The SDK handles token refresh automatically. If it can't refresh, Meridian returns a clear error telling you to run `claude login`.
 
+## Token Refresh
+
+The OAuth token expires periodically. While the SDK subprocess refreshes tokens automatically when needed, you can also refresh manually on a schedule:
+
+```bash
+# Manual refresh
+meridian refresh-token
+
+# Schedule with cron (every 6 hours)
+0 */6 * * * meridian refresh-token
+
+# Or with systemd timer — create /etc/systemd/system/meridian-refresh.timer
+[Unit]
+Description=Refresh Meridian OAuth token
+After=network.target
+
+[Timer]
+OnBootSec=30min
+OnUnitActiveSec=6h
+
+[Install]
+WantedBy=timers.target
+```
+
+Exit code: 0 on success, 1 on failure. Logging goes to stderr and `~/.cache/claude/logs/` (via the SDK).
+
 ## Contributing
 
 Issues and PRs welcome. See [`ARCHITECTURE.md`](ARCHITECTURE.md) for module structure and dependency rules, [`CLAUDE.md`](CLAUDE.md) for coding guidelines, and [`E2E.md`](E2E.md) for end-to-end test procedures.

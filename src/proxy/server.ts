@@ -17,7 +17,8 @@ import { createPassthroughMcpServer, stripMcpPrefix, PASSTHROUGH_MCP_NAME, PASST
 
 import { telemetryStore, diagnosticLog, createTelemetryRoutes, landingHtml } from "../telemetry"
 import type { RequestMetric } from "../telemetry"
-import { classifyError, isStaleSessionError, isRateLimitError, isExtraUsageRequiredError } from "./errors"
+import { classifyError, isStaleSessionError, isRateLimitError, isExtraUsageRequiredError, isExpiredTokenError } from "./errors"
+import { refreshOAuthToken } from "./tokenRefresh"
 import { mapModelToClaudeModel, resolveClaudeExecutableAsync, isClosedControllerError, getClaudeAuthStatusAsync, hasExtendedContext, stripExtendedContext } from "./models"
 import { getLastUserMessage } from "./messages"
 import { detectAdapter } from "./adapters/detect"
@@ -485,6 +486,7 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
             const response = (async function* () {
               let rateLimitRetries = 0
 
+              let tokenRefreshed = false
               while (true) {
                 // Track whether response content was yielded.
                 // The SDK emits metadata (session_id etc.) before the API call;
@@ -540,6 +542,18 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
                     })
                     console.error(`[PROXY] ${requestMeta.requestId} extra usage required for [1m], falling back to ${model}`)
                     continue
+                  }
+
+                  // Expired OAuth token: refresh once and retry
+                  if (isExpiredTokenError(errMsg) && !tokenRefreshed) {
+                    tokenRefreshed = true
+                    const refreshed = await refreshOAuthToken()
+                    if (refreshed) {
+                      claudeLog("token_refresh.retrying", { mode: "non_stream" })
+                      console.error(`[PROXY] ${requestMeta.requestId} OAuth token expired — refreshed, retrying`)
+                      continue
+                    }
+                    // Refresh failed — fall through and surface the error
                   }
 
                   // Rate-limit retry: first strip [1m] (free, different tier), then backoff
@@ -792,6 +806,7 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
 
               const response = (async function* () {
                 let rateLimitRetries = 0
+                let tokenRefreshed = false
 
                 while (true) {
                   // Track whether client-visible SSE events were yielded.
@@ -849,6 +864,18 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
                       })
                       console.error(`[PROXY] ${requestMeta.requestId} extra usage required for [1m], falling back to ${model}`)
                       continue
+                    }
+
+                    // Expired OAuth token: refresh once and retry
+                    if (isExpiredTokenError(errMsg) && !tokenRefreshed) {
+                      tokenRefreshed = true
+                      const refreshed = await refreshOAuthToken()
+                      if (refreshed) {
+                        claudeLog("token_refresh.retrying", { mode: "stream" })
+                        console.error(`[PROXY] ${requestMeta.requestId} OAuth token expired — refreshed, retrying`)
+                        continue
+                      }
+                      // Refresh failed — fall through and surface the error
                     }
 
                     // Rate-limit retry: first strip [1m] (free, different tier), then backoff

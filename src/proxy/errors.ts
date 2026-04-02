@@ -15,6 +15,15 @@ export interface ClassifiedError {
 export function classifyError(errMsg: string): ClassifiedError {
   const lower = errMsg.toLowerCase()
 
+  // Expired OAuth token (more specific than the generic auth check below)
+  if (lower.includes("oauth token has expired")) {
+    return {
+      status: 401,
+      type: "authentication_error",
+      message: "Claude OAuth token has expired and could not be refreshed automatically. Run 'claude login' in your terminal to re-authenticate."
+    }
+  }
+
   // Authentication failures
   if (lower.includes("401") || lower.includes("authentication") || lower.includes("invalid auth") || lower.includes("credentials")) {
     return {
@@ -111,6 +120,14 @@ export function classifyError(errMsg: string): ClassifiedError {
     type: "api_error",
     message: errMsg || "Unknown error"
   }
+}
+
+/**
+ * Detect errors caused by an expired OAuth access token.
+ * Triggers an inline token refresh + retry in server.ts.
+ */
+export function isExpiredTokenError(errMsg: string): boolean {
+  return errMsg.toLowerCase().includes("oauth token has expired")
 }
 
 /**

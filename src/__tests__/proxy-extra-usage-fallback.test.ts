@@ -27,6 +27,16 @@ let mockBehavior: "extra_usage_then_succeed" | "always_extra_usage" | "succeed" 
 
 const EXTRA_USAGE_ERROR = "Claude Code returned an error result: API Error: Extra usage is required for 1M context · enable extra usage at claude.ai/settings/usage, or use --model to switch"
 
+// Force sonnet[1m] regardless of auth status so tests are self-contained.
+mock.module("../proxy/models", () => ({
+  mapModelToClaudeModel: () => "sonnet[1m]",
+  resolveClaudeExecutableAsync: async () => "claude",
+  getClaudeAuthStatusAsync: async () => ({ loggedIn: true, subscriptionType: "max" }),
+  hasExtendedContext: (model: string) => model.endsWith("[1m]"),
+  stripExtendedContext: (model: string) => model.replace("[1m]", ""),
+  isClosedControllerError: () => false,
+}))
+
 mock.module("@anthropic-ai/claude-agent-sdk", () => ({
   query: (opts: any) => {
     queryCallCount++

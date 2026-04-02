@@ -415,7 +415,7 @@ API keys are billed per token. Your Max subscription is a flat monthly fee with 
 It works with any Claude subscription that supports the Claude Code SDK. Max is recommended for the best rate limits.
 
 **What happens if my session expires?**
-The SDK handles token refresh automatically. If it can't refresh, Meridian returns a clear error telling you to run `claude login`.
+OAuth tokens expire roughly every 8 hours. Meridian detects the expiry on the next request, refreshes the token automatically, and retries — so requests continue to work transparently. If the refresh itself fails (e.g. your refresh token has expired after weeks of inactivity), Meridian returns a clear error telling you to run `claude login`.
 
 ## Contributing
 

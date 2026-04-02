@@ -419,12 +419,18 @@ It works with any Claude subscription that supports the Claude Code SDK. Max is 
 OAuth tokens expire roughly every 8 hours. Meridian detects the expiry on the next request, refreshes the token automatically, and retries — so requests continue to work transparently. If the refresh itself fails (e.g. your refresh token has expired after weeks of inactivity), Meridian returns a clear error telling you to run `claude login`.
 
 **Can I trigger a refresh manually?**
-Yes — hit the `/auth/refresh` endpoint while the proxy is running:
+Yes — two options:
+
 ```bash
-curl -s -X POST http://127.0.0.1:3456/auth/refresh | jq
+# CLI (works whether the proxy is running or not)
+meridian refresh-token
+
+# HTTP endpoint (while the proxy is running)
+curl -s -X POST http://127.0.0.1:3456/auth/refresh
 # {"success":true,"message":"OAuth token refreshed successfully"}
 ```
-Useful for health monitoring setups where you want to pre-emptively refresh before a long idle period.
+
+The CLI exits 0 on success and 1 on failure, so it integrates cleanly into scripts or health checks.
 
 ## Contributing
 

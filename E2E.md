@@ -77,6 +77,7 @@ kill $(lsof -ti :3456)
 | FC6 | [File Changes: Multiple ops (stream)](#fc6-file-changes-multiple-ops-stream) | Multiple file changes emitted as a text block in SSE stream | 2026-03-30 |
 | E22 | [OAuth Token Refresh](#e22-oauth-token-refresh) | Expired access token auto-refreshed inline; request succeeds without manual `claude login` | 2026-04-02 |
 | E23 | [Subagent Model Selection](#e23-subagent-model-selection) | `x-opencode-agent-mode: subagent` header selects base model; primary gets 1M; proxy log shows `agent=subagent` | 2026-04-02 |
+| E24 | [Default Non-Streaming](#e24-default-non-streaming) | Omitting `stream` field returns JSON (not SSE), matching Anthropic API spec | - |
 
 ---
 
@@ -1022,6 +1023,33 @@ opencode run --model anthropic/claude-sonnet-4-6 \
 - Two distinct proxy log entries visible (parent + subagent turn)
 
 **What's being tested:** `mapModelToClaudeModel()` `agentMode` parameter in `models.ts`, `x-opencode-agent-mode` header reading in `server.ts`, and the `meridian-agent-mode.ts` plugin's use of `(incoming.agent as any).mode` to detect subagents without any API calls.
+
+---
+
+## E24: Default Non-Streaming
+
+**Verifies:** When the `stream` field is omitted from the request body, the proxy returns a single JSON response (`application/json`), not an SSE stream — matching the Anthropic API spec default.
+
+```bash
+curl -s -D /tmp/e2e-headers.txt http://127.0.0.1:3456/v1/messages \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: dummy" \
+  -d '{
+    "model": "claude-haiku-4-5-20251001",
+    "max_tokens": 10,
+    "messages": [{"role": "user", "content": "Say OK"}]
+  }'
+grep -i content-type /tmp/e2e-headers.txt
+rm /tmp/e2e-headers.txt
+```
+
+**Pass criteria:**
+- Response header: `Content-Type: application/json` (not `text/event-stream`)
+- Response body: `"type": "message"`, `"role": "assistant"`, valid `content` array
+- Response is a single JSON object, not SSE events
+- Proxy log: `stream=false`
+
+**What's being tested:** The `body.stream ?? false` default in `server.ts`. Prior to this fix, omitting `stream` defaulted to `true` (SSE), which broke SDK clients calling `messages.create()` without an explicit `stream` parameter.
 
 ---
 

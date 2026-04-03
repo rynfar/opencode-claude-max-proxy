@@ -21,6 +21,7 @@ import {
   blockStop,
   messageDelta,
   messageStop,
+  assistantMessage,
   parseSSE,
   streamEvent,
 } from "./helpers"
@@ -285,5 +286,66 @@ describe("Streaming: single message per response", () => {
     )
     expect(toolStarts.length).toBe(1)
     expect((toolStarts[0]?.data as any).content_block.name).toBe("task")
+  })
+})
+
+describe("Default streaming behavior", () => {
+  beforeEach(() => {
+    mockMessages = []
+    clearSessionCache()
+  })
+
+  it("should return JSON (non-streaming) when stream field is omitted", async () => {
+    mockMessages = [
+      assistantMessage([{ type: "text", text: "Hello!" }]),
+    ]
+
+    const app = createTestApp()
+    const req = new Request("http://localhost/v1/messages", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-5",
+        max_tokens: 1024,
+        messages: [{ role: "user", content: "Hi" }],
+        // stream field intentionally omitted
+      }),
+    })
+    const response = await app.fetch(req)
+    const contentType = response.headers.get("content-type") || ""
+
+    expect(contentType).toContain("application/json")
+    const body = await response.json() as any
+    expect(body.content).toBeArray()
+    expect(body.content[0].type).toBe("text")
+    expect(body.content[0].text).toBe("Hello!")
+    expect(body.stop_reason).toBe("end_turn")
+  })
+
+  it("should return SSE when stream is explicitly true", async () => {
+    mockMessages = [
+      messageStart("msg_explicit"),
+      textBlockStart(0),
+      textDelta(0, "Hello!"),
+      blockStop(0),
+      messageDelta("end_turn"),
+      messageStop(),
+    ]
+
+    const app = createTestApp()
+    const req = new Request("http://localhost/v1/messages", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-5",
+        max_tokens: 1024,
+        messages: [{ role: "user", content: "Hi" }],
+        stream: true,
+      }),
+    })
+    const response = await app.fetch(req)
+    const contentType = response.headers.get("content-type") || ""
+
+    expect(contentType).toContain("text/event-stream")
   })
 })

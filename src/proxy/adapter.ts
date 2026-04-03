@@ -82,7 +82,7 @@ export interface AgentAdapter {
    *
    * When this method is defined and returns false, the proxy forces
    * stream=false regardless of the client's body.stream setting.
-   * When undefined or returns true, body.stream is used (defaulting to true).
+   * When undefined or returns true, body.stream is used (defaulting to false).
    */
   prefersStreaming?(body: any): boolean
 

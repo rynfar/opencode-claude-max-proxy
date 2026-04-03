@@ -196,7 +196,7 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
         const adapter = detectAdapter(c)
         // Allow adapter to override streaming preference (e.g. LiteLLM requires non-streaming)
         const adapterStreamPref = adapter.prefersStreaming?.(body)
-        const stream = adapterStreamPref !== undefined ? adapterStreamPref : (body.stream ?? true)
+        const stream = adapterStreamPref !== undefined ? adapterStreamPref : (body.stream ?? false)
         const workingDirectory = (process.env.MERIDIAN_WORKDIR ?? process.env.CLAUDE_PROXY_WORKDIR) || adapter.extractWorkingDirectory(body) || process.cwd()
 
         // Strip env vars that would cause the SDK subprocess to loop back through

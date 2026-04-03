@@ -23,7 +23,7 @@ let queryCalls: Array<{ model: string; callIndex: number }> = []
 let queryCallCount = 0
 
 // Control what the mock does
-let mockBehavior: "extra_usage_then_succeed" | "always_extra_usage" | "succeed" = "succeed"
+let mockBehavior: "extra_usage_then_succeed" | "always_extra_usage" | "succeed" | "error_assistant_then_ratelimit" = "succeed"
 
 const EXTRA_USAGE_ERROR = "Claude Code returned an error result: API Error: Extra usage is required for 1M context · enable extra usage at claude.ai/settings/usage, or use --model to switch"
 
@@ -52,6 +52,29 @@ mock.module("@anthropic-ai/claude-agent-sdk", () => ({
 
       if (mockBehavior === "extra_usage_then_succeed" && callIndex === 1) {
         throw new Error(EXTRA_USAGE_ERROR)
+      }
+
+      // Simulates real SDK behaviour: emits an error assistant event first,
+      // then throws a rate_limit error (which is what the SDK does when the
+      // rate_limit_event with status:"rejected" is received).
+      // The didYieldContent guard must NOT fire for error assistant events.
+      if (mockBehavior === "error_assistant_then_ratelimit" && callIndex === 1) {
+        yield {
+          type: "assistant",
+          error: "rate_limit",
+          uuid: `uuid-${callIndex}-err`,
+          message: {
+            id: `msg-${callIndex}-err`,
+            type: "message",
+            role: "assistant",
+            content: [{ type: "text", text: "API Error: Extra usage is required for 1M context" }],
+            model: "<synthetic>",
+            stop_reason: "stop_sequence",
+            usage: { input_tokens: 0, output_tokens: 0 },
+          },
+          session_id: `sdk-session-${callIndex}`,
+        }
+        throw new Error("429 rate limit exceeded for 1m context")
       }
 
       // Success path
@@ -200,6 +223,32 @@ describe("Extra usage required fallback", () => {
       // Should complete nearly instantly (no 1s+ backoff delay)
       // Rate limit retry uses 1000ms minimum — extra usage should be <500ms
       expect(elapsed).toBeLessThan(500)
+    })
+  })
+
+  describe("Real SDK behaviour: error assistant emitted before throw", () => {
+    it("retries after error assistant event + rate limit throw (non-streaming)", async () => {
+      // Simulates the real SDK sequence when extra usage is disabled:
+      // 1. SDK yields type:"assistant" with error:"rate_limit" field
+      // 2. SDK throws a rate limit error
+      // Previously, step 1 set didYieldContent=true which blocked the retry.
+      mockBehavior = "error_assistant_then_ratelimit"
+      const app = createTestApp()
+
+      const response = await post(app, {
+        model: "sonnet",
+        stream: false,
+        messages: [{ role: "user", content: "hello" }],
+      })
+
+      // Should succeed after stripping [1m] and retrying with sonnet
+      expect(response.status).toBe(200)
+      const body = await response.json()
+      expect(body.content).toBeDefined()
+      // Two query calls: first (sonnet[1m]) failed, second (sonnet) succeeded
+      expect(queryCalls.length).toBe(2)
+      expect(queryCalls[0].model).toBe("sonnet[1m]")
+      expect(queryCalls[1].model).toBe("sonnet")
     })
   })
 })

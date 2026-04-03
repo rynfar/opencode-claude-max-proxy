@@ -499,7 +499,10 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
                     passthrough, stream: false, sdkAgents, passthroughMcp, cleanEnv,
                     resumeSessionId, isUndo, undoRollbackUuid, sdkHooks, adapter, onStderr,
                   }))) {
-                    if ((event as any).type === "assistant") {
+                    // Only count real assistant content — not SDK error messages
+                    // (which arrive as type:"assistant" with an error field set).
+                    // Counting error assistants as content would prevent retries.
+                    if ((event as any).type === "assistant" && !(event as any).error) {
                       didYieldContent = true
                     }
                     yield event

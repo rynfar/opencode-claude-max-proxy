@@ -35,6 +35,8 @@ mock.module("../proxy/models", () => ({
   hasExtendedContext: (model: string) => model.endsWith("[1m]"),
   stripExtendedContext: (model: string) => model.replace("[1m]", ""),
   isClosedControllerError: () => false,
+  recordExtendedContextUnavailable: () => {},
+  isExtendedContextKnownUnavailable: () => false,
 }))
 
 mock.module("@anthropic-ai/claude-agent-sdk", () => ({

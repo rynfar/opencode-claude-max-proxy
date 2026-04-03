@@ -50,7 +50,7 @@ export function mapModelToClaudeModel(model: string, subscriptionType?: string |
   const isSubagent = agentMode === "subagent"
 
   if (model.includes("opus")) {
-    if (use1m && !isSubagent) return "opus[1m]"
+    if (use1m && !isSubagent && !isExtendedContextKnownUnavailable()) return "opus[1m]"
     return "opus"
   }
 
@@ -59,7 +59,46 @@ export function mapModelToClaudeModel(model: string, subscriptionType?: string |
 
   if (!use1m) return "sonnet"
   if (isSubagent) return "sonnet"
+  // Skip [1m] during the cooldown window after a confirmed Extra Usage failure.
+  // After the window expires, this falls through to return [1m] once — probing
+  // whether Extra Usage has been enabled since last time.
+  if (isExtendedContextKnownUnavailable()) return "sonnet"
   return subscriptionType === "max" ? "sonnet[1m]" : "sonnet"
+}
+
+// ---------------------------------------------------------------------------
+// Extended context availability — time-based cooldown
+// ---------------------------------------------------------------------------
+
+/** How long to skip [1m] models after confirming Extra Usage is not enabled. */
+const EXTRA_USAGE_RETRY_MS = 60 * 60 * 1000 // 1 hour
+
+let extraUsageUnavailableAt = 0
+
+/**
+ * Record that Extra Usage is not enabled on this subscription.
+ * For the next hour, mapModelToClaudeModel will return the base model
+ * directly — no failed [1m] attempt per request. After the cooldown
+ * the next request probes [1m] once; if Extra Usage was enabled in the
+ * meantime it succeeds and the flag is never set again.
+ */
+export function recordExtendedContextUnavailable(): void {
+  extraUsageUnavailableAt = Date.now()
+}
+
+/**
+ * Returns true while within the cooldown window after a confirmed
+ * Extra Usage failure. After the window expires this returns false,
+ * allowing one probe to check whether Extra Usage has been enabled.
+ */
+export function isExtendedContextKnownUnavailable(): boolean {
+  return extraUsageUnavailableAt > 0 &&
+    Date.now() - extraUsageUnavailableAt < EXTRA_USAGE_RETRY_MS
+}
+
+/** Reset the Extended Context unavailability timer — for testing only. */
+export function resetExtendedContextUnavailable(): void {
+  extraUsageUnavailableAt = 0
 }
 
 /**

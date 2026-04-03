@@ -20,7 +20,7 @@ import type { RequestMetric } from "../telemetry"
 import { classifyError, isStaleSessionError, isRateLimitError, isExtraUsageRequiredError, isExpiredTokenError } from "./errors"
 import { refreshOAuthToken } from "./tokenRefresh"
 import { checkPluginConfigured } from "./setup"
-import { mapModelToClaudeModel, resolveClaudeExecutableAsync, isClosedControllerError, getClaudeAuthStatusAsync, hasExtendedContext, stripExtendedContext } from "./models"
+import { mapModelToClaudeModel, resolveClaudeExecutableAsync, isClosedControllerError, getClaudeAuthStatusAsync, hasExtendedContext, stripExtendedContext, recordExtendedContextUnavailable } from "./models"
 import { getLastUserMessage } from "./messages"
 import { detectAdapter } from "./adapters/detect"
 import { buildQueryOptions, type QueryContext } from "./query"
@@ -535,17 +535,22 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
                     return
                   }
 
-                  // Extra Usage required: strip [1m] immediately (no backoff needed)
+                  // Extra Usage required: strip [1m] and record 1-hour cooldown.
+                  // mapModelToClaudeModel will skip [1m] for the next hour so
+                  // subsequent requests don't each make one extra failed attempt.
+                  // After the hour expires a single probe fires; if the user has
+                  // enabled Extra Usage in the meantime it succeeds and the flag clears.
                   if (isExtraUsageRequiredError(errMsg) && hasExtendedContext(model)) {
                     const from = model
                     model = stripExtendedContext(model)
+                    recordExtendedContextUnavailable()
                     claudeLog("upstream.context_fallback", {
                       mode: "non_stream",
                       from,
                       to: model,
                       reason: "extra_usage_required",
                     })
-                    console.error(`[PROXY] ${requestMeta.requestId} extra usage required for [1m], falling back to ${model}`)
+                    console.error(`[PROXY] ${requestMeta.requestId} extra usage required for [1m], falling back to ${model} (skipping [1m] for 1h)`)
                     continue
                   }
 
@@ -857,17 +862,18 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
                       return
                     }
 
-                    // Extra Usage required: strip [1m] immediately (no backoff needed)
+                    // Extra Usage required: strip [1m] and record 1-hour cooldown.
                     if (isExtraUsageRequiredError(errMsg) && hasExtendedContext(model)) {
                       const from = model
                       model = stripExtendedContext(model)
+                      recordExtendedContextUnavailable()
                       claudeLog("upstream.context_fallback", {
                         mode: "stream",
                         from,
                         to: model,
                         reason: "extra_usage_required",
                       })
-                      console.error(`[PROXY] ${requestMeta.requestId} extra usage required for [1m], falling back to ${model}`)
+                      console.error(`[PROXY] ${requestMeta.requestId} extra usage required for [1m], falling back to ${model} (skipping [1m] for 1h)`)
                       continue
                     }
 

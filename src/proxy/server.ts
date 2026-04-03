@@ -21,6 +21,7 @@ import { classifyError, isStaleSessionError, isRateLimitError, isExtraUsageRequi
 import { refreshOAuthToken } from "./tokenRefresh"
 import { checkPluginConfigured } from "./setup"
 import { mapModelToClaudeModel, resolveClaudeExecutableAsync, isClosedControllerError, getClaudeAuthStatusAsync, hasExtendedContext, stripExtendedContext, recordExtendedContextUnavailable } from "./models"
+import { translateOpenAiToAnthropic, translateAnthropicToOpenAi, translateAnthropicSseEvent, buildModelList } from "./openai"
 import { getLastUserMessage } from "./messages"
 import { detectAdapter } from "./adapters/detect"
 import { buildQueryOptions, type QueryContext } from "./query"
@@ -140,7 +141,7 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
         status: "ok",
         service: "meridian",
         format: "anthropic",
-        endpoints: ["/v1/messages", "/messages", "/telemetry", "/health"]
+        endpoints: ["/v1/messages", "/messages", "/v1/chat/completions", "/v1/models", "/telemetry", "/health"]
       })
     }
     return c.html(landingHtml)
@@ -1422,6 +1423,108 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
       { success: false, message: "Token refresh failed. If the problem persists, run 'claude login'." },
       500
     )
+  })
+
+  // --- OpenAI Chat Completions Compatibility ---
+  // Translates OpenAI /v1/chat/completions requests to Anthropic format and
+  // routes them through the internal /v1/messages handler via app.fetch().
+  // No network roundtrip — Hono resolves the route in-process.
+  // See src/proxy/openai.ts for the translation logic and design rationale.
+  app.post("/v1/chat/completions", async (c) => {
+    const rawBody = await c.req.json() as Record<string, unknown>
+    const anthropicBody = translateOpenAiToAnthropic(rawBody)
+
+    if (!anthropicBody) {
+      return c.json(
+        { type: "error", error: { type: "invalid_request_error", message: "messages: Field required" } },
+        400
+      )
+    }
+
+    // Route internally via app.fetch() — no network roundtrip.
+    // Hono resolves the path in-process; the URL scheme/host are ignored.
+    const internalReq = new Request("http://internal/v1/messages", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(anthropicBody),
+    })
+    const internalRes = await app.fetch(internalReq)
+
+    if (!internalRes.ok) {
+      const errBody = await internalRes.text()
+      return c.json(
+        { type: "error", error: { type: "upstream_error", message: errBody } },
+        internalRes.status as 400 | 401 | 429 | 500
+      )
+    }
+
+    const completionId = `chatcmpl-${randomUUID()}`
+    const created = Math.floor(Date.now() / 1000)
+    const model = (typeof rawBody.model === "string" && rawBody.model) ? rawBody.model : "claude-sonnet-4-6"
+
+    if (!anthropicBody.stream) {
+      const anthropicRes = await internalRes.json() as Record<string, unknown>
+      return c.json(translateAnthropicToOpenAi(anthropicRes, completionId, model, created))
+    }
+
+    // Streaming: translate Anthropic SSE events to OpenAI SSE chunks
+    const encoder = new TextEncoder()
+    const readable = new ReadableStream({
+      async start(controller) {
+        const reader = internalRes.body?.getReader()
+        if (!reader) { controller.close(); return }
+
+        const decoder = new TextDecoder()
+        let buffer = ""
+        let streamError: Error | null = null
+
+        try {
+          while (true) {
+            const { done, value } = await reader.read()
+            if (done) break
+
+            buffer += decoder.decode(value, { stream: true })
+            const lines = buffer.split("\n")
+            buffer = lines.pop() ?? ""
+
+            for (const line of lines) {
+              if (!line.startsWith("data: ")) continue
+              const dataStr = line.slice(6).trim()
+              if (!dataStr) continue
+
+              let event: Record<string, unknown>
+              try { event = JSON.parse(dataStr) as Record<string, unknown> }
+              catch { continue }
+
+              const chunk = translateAnthropicSseEvent(event, completionId, model, created)
+              if (chunk) controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`))
+            }
+          }
+        } catch (err) {
+          streamError = err instanceof Error ? err : new Error(String(err))
+        } finally {
+          if (!streamError) controller.enqueue(encoder.encode("data: [DONE]\n\n"))
+          controller.close()
+        }
+      },
+    })
+
+    return new Response(readable, {
+      headers: {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+      },
+    })
+  })
+
+  // --- Model Discovery ---
+  // Returns available Claude models in OpenAI-compatible format.
+  // Context window reflects the subscription tier (Max = 1M, others = 200k).
+  app.get("/v1/models", async (c) => {
+    const authStatus = await getClaudeAuthStatusAsync()
+    const isMax = authStatus?.subscriptionType === "max"
+    return c.json({ object: "list", data: buildModelList(isMax) })
   })
 
   // Catch-all: log unhandled requests

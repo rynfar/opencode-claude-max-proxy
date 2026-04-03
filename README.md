@@ -11,7 +11,7 @@
 
 ---
 
-Meridian turns your Claude Max subscription into a local Anthropic API. Any tool that speaks the Anthropic protocol — OpenCode, Crush, Cline, Aider — connects to Meridian and gets Claude, powered by your existing subscription through the official Claude Code SDK.
+Meridian turns your Claude Max subscription into a local Anthropic API. Any tool that speaks the Anthropic or OpenAI protocol — OpenCode, Crush, Cline, Aider, Open WebUI — connects to Meridian and gets Claude, powered by your existing subscription through the official Claude Code SDK.
 
 > [!NOTE]
 > **Renamed from `opencode-claude-max-proxy`.** If you're upgrading, see [`MIGRATION.md`](MIGRATION.md) for the checklist. Your existing sessions, env vars, and agent configs all continue to work.
@@ -53,6 +53,7 @@ Meridian bridges that gap. It runs locally, accepts standard Anthropic API reque
 ## Features
 
 - **Standard Anthropic API** — drop-in compatible with any tool that supports a custom `base_url`
+- **OpenAI-compatible API** — `/v1/chat/completions` and `/v1/models` for tools that only speak the OpenAI protocol (Open WebUI, Continue, etc.) — no LiteLLM needed
 - **Session management** — conversations persist across requests, survive compaction and undo, resume after proxy restarts
 - **Streaming** — full SSE streaming with MCP tool filtering
 - **Concurrent sessions** — run parent and subagent requests in parallel
@@ -173,6 +174,24 @@ ANTHROPIC_API_KEY=x ANTHROPIC_BASE_URL=http://127.0.0.1:3456 \
 
 > **Note:** `--no-stream` is incompatible due to a litellm parsing issue — use the default streaming mode.
 
+### OpenAI-compatible tools (Open WebUI, Continue, etc.)
+
+Meridian speaks the OpenAI protocol natively — no LiteLLM or translation proxy needed.
+
+**`POST /v1/chat/completions`** — accepts OpenAI chat format, returns OpenAI completion format (streaming and non-streaming)
+
+**`GET /v1/models`** — returns available Claude models in OpenAI format
+
+Point any OpenAI-compatible tool at `http://127.0.0.1:3456` with any API key value:
+
+```bash
+# Open WebUI: set OpenAI API base to http://127.0.0.1:3456, API key to any value
+# Continue: set apiBase to http://127.0.0.1:3456 with provider: openai
+# Any OpenAI SDK: set base_url="http://127.0.0.1:3456", api_key="dummy"
+```
+
+> **Note:** Multi-turn conversations work by packing prior turns into the system prompt. Each request is a fresh SDK session — OpenAI clients replay full history themselves and don't use Meridian's session resumption.
+
 ### Any Anthropic-compatible tool
 
 ```bash
@@ -189,7 +208,8 @@ export ANTHROPIC_BASE_URL=http://127.0.0.1:3456
 | [Crush](https://github.com/charmbracelet/crush) | ✅ Verified | Provider config (see above) — full tool support, session resume, headless `crush run` |
 | [Cline](https://github.com/cline/cline) | ✅ Verified | Config (see above) — full tool support, file read/write/edit, bash, session resume |
 | [Aider](https://github.com/paul-gauthier/aider) | ✅ Verified | Env vars — file editing, streaming; `--no-stream` broken (litellm bug) |
-| [Continue](https://github.com/continuedev/continue) | 🔲 Untested | Should work — standard Anthropic API |
+| [Open WebUI](https://github.com/open-webui/open-webui) | ✅ Verified | OpenAI-compatible endpoints — set base URL to `http://127.0.0.1:3456` |
+| [Continue](https://github.com/continuedev/continue) | 🔲 Untested | OpenAI-compatible endpoints should work — set `apiBase` to `http://127.0.0.1:3456` |
 
 Tested an agent or built a plugin? [Open an issue](https://github.com/rynfar/meridian/issues) and we'll add it.
 
@@ -209,6 +229,7 @@ src/proxy/
 ├── errors.ts              ← Error classification
 ├── models.ts              ← Model mapping (sonnet/opus/haiku, agentMode)
 ├── tokenRefresh.ts        ← Cross-platform OAuth token refresh
+├── openai.ts              ← OpenAI ↔ Anthropic format translation (pure)
 ├── setup.ts               ← OpenCode plugin configuration
 ├── session/
 │   ├── lineage.ts         ← Per-message hashing, mutation classification (pure)
@@ -272,6 +293,8 @@ Implement the `AgentAdapter` interface in `src/proxy/adapters/`. See [`adapters/
 | `GET /` | Landing page |
 | `POST /v1/messages` | Anthropic Messages API |
 | `POST /messages` | Alias for `/v1/messages` |
+| `POST /v1/chat/completions` | OpenAI-compatible chat completions |
+| `GET /v1/models` | OpenAI-compatible model list |
 | `GET /health` | Auth status, mode, plugin status |
 | `POST /auth/refresh` | Manually refresh the OAuth token |
 | `GET /telemetry` | Performance dashboard |

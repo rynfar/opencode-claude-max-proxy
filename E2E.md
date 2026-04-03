@@ -78,6 +78,9 @@ kill $(lsof -ti :3456)
 | E22 | [OAuth Token Refresh](#e22-oauth-token-refresh) | Expired access token auto-refreshed inline; request succeeds without manual `claude login` | 2026-04-02 |
 | E23 | [Subagent Model Selection](#e23-subagent-model-selection) | `x-opencode-agent-mode: subagent` header selects base model; primary gets 1M; proxy log shows `agent=subagent` | 2026-04-02 |
 | E24 | [Default Non-Streaming](#e24-default-non-streaming) | Omitting `stream` field returns JSON (not SSE), matching Anthropic API spec | - |
+| E25 | [OpenAI Compat: Non-Streaming](#e25-openai-compat-non-streaming) | `/v1/chat/completions` returns valid OpenAI completion shape | - |
+| E26 | [OpenAI Compat: Streaming](#e26-openai-compat-streaming) | `/v1/chat/completions` with `stream: true` returns OpenAI SSE chunks | - |
+| E27 | [OpenAI Compat: Models](#e27-openai-compat-models) | `GET /v1/models` returns Claude model list in OpenAI format | - |
 
 ---
 
@@ -1050,6 +1053,83 @@ rm /tmp/e2e-headers.txt
 - Proxy log: `stream=false`
 
 **What's being tested:** The `body.stream ?? false` default in `server.ts`. Prior to this fix, omitting `stream` defaulted to `true` (SSE), which broke SDK clients calling `messages.create()` without an explicit `stream` parameter.
+
+---
+
+## E25: OpenAI Compat: Non-Streaming
+
+**Verifies:** `POST /v1/chat/completions` accepts an OpenAI-format request and returns a valid OpenAI completion JSON object.
+
+```bash
+curl -s http://127.0.0.1:3456/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: dummy" \
+  -d '{
+    "model": "claude-haiku-4-5-20251001",
+    "max_tokens": 20,
+    "stream": false,
+    "messages": [{"role": "user", "content": "Say: OK"}]
+  }' | python3 -m json.tool
+```
+
+**Pass criteria:**
+- `"object": "chat.completion"`
+- `id` starts with `chatcmpl-`
+- `choices[0].message.role` is `"assistant"`
+- `choices[0].message.content` contains a response
+- `choices[0].finish_reason` is `"stop"`
+- `usage.prompt_tokens`, `usage.completion_tokens`, `usage.total_tokens` are numbers
+- Proxy log: `stream=false` (non-streaming path used internally)
+
+**What's being tested:** `translateOpenAiToAnthropic()` and `translateAnthropicToOpenAi()` in `openai.ts`, internal routing via `app.fetch()` to `/v1/messages`.
+
+---
+
+## E26: OpenAI Compat: Streaming
+
+**Verifies:** `POST /v1/chat/completions` with `stream: true` returns OpenAI SSE chunks in the correct format.
+
+```bash
+curl -sN http://127.0.0.1:3456/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: dummy" \
+  -d '{
+    "model": "claude-haiku-4-5-20251001",
+    "max_tokens": 20,
+    "stream": true,
+    "messages": [{"role": "user", "content": "Say: hello"}]
+  }'
+```
+
+**Pass criteria:**
+- Response `Content-Type: text/event-stream`
+- First data chunk has `"object": "chat.completion.chunk"` and `choices[0].delta.role == "assistant"`
+- At least one chunk has non-empty `choices[0].delta.content`
+- A chunk has `choices[0].finish_reason == "stop"`
+- Stream ends with `data: [DONE]`
+- All chunks share the same `id` starting with `chatcmpl-`
+- Proxy log: `stream=true`
+
+**What's being tested:** `translateAnthropicSseEvent()` in `openai.ts`, SSE stream translation in `server.ts`.
+
+---
+
+## E27: OpenAI Compat: Models
+
+**Verifies:** `GET /v1/models` returns available Claude models in OpenAI format with correct context windows for the subscription tier.
+
+```bash
+curl -s http://127.0.0.1:3456/v1/models | python3 -m json.tool
+```
+
+**Pass criteria:**
+- `"object": "list"`
+- `data` array contains `claude-sonnet-4-6`, `claude-opus-4-6`, `claude-haiku-4-5-20251001`
+- Each model has `object: "model"`, `owned_by: "anthropic"`, `context_window > 0`
+- For Max subscription: sonnet and opus have `context_window: 1000000`
+- Haiku always has `context_window: 200000`
+
+**What's being tested:** `buildModelList()` in `openai.ts`, `GET /v1/models` route in `server.ts`.
 
 ---
 

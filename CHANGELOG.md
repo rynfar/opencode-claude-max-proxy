@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.26.3](https://github.com/rynfar/meridian/compare/v1.26.2...v1.26.3) (2026-04-03)
+
+
+### Bug Fixes
+
+* move clearSessionCache to afterEach in shared store test to avoid wiping store before lookup ([3fe65fb](https://github.com/rynfar/meridian/commit/3fe65fb40df71773ffc14ce02f91a7f234525d0f))
+
 ## [1.26.2](https://github.com/rynfar/meridian/compare/v1.26.1...v1.26.2) (2026-04-03)
 
 

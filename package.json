@@ -1,6 +1,6 @@
 {
   "name": "@rynfar/meridian",
-  "version": "1.26.2",
+  "version": "1.26.3",
   "description": "Local Anthropic API powered by your Claude Max subscription. One subscription, every agent.",
   "type": "module",
   "main": "./dist/server.js",

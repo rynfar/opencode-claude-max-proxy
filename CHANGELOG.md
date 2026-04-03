@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.25.1](https://github.com/rynfar/meridian/compare/v1.25.0...v1.25.1) (2026-04-03)
+
+
+### Bug Fixes
+
+* isolate auth status tests to prevent CI flakiness ([07d8331](https://github.com/rynfar/meridian/commit/07d83311f92445922f317f60736d78dd136494e2))
+
 ## [1.25.0](https://github.com/rynfar/meridian/compare/v1.24.5...v1.25.0) (2026-04-03)
 
 

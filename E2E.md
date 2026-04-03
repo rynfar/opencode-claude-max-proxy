@@ -81,6 +81,9 @@ kill $(lsof -ti :3456)
 | E25 | [OpenAI Compat: Non-Streaming](#e25-openai-compat-non-streaming) | `/v1/chat/completions` returns valid OpenAI completion shape | - |
 | E26 | [OpenAI Compat: Streaming](#e26-openai-compat-streaming) | `/v1/chat/completions` with `stream: true` returns OpenAI SSE chunks | - |
 | E27 | [OpenAI Compat: Models](#e27-openai-compat-models) | `GET /v1/models` returns Claude model list in OpenAI format | - |
+| E28 | [SDK Param Passthrough](#e28-sdk-param-passthrough) | Live proxy accepts effort/thinking/task_budget/beta fields without breaking responses | 2026-04-03 |
+| E29 | [Context Usage Endpoint](#e29-context-usage-endpoint) | `/v1/sessions/:claudeSessionId/context-usage` returns live token usage for a completed request | 2026-04-03 |
+| E30 | [Context Usage via Fingerprint + Restart](#e30-context-usage-via-fingerprint--restart) | Context usage lookup works for headerless sessions and survives proxy restart via shared store | 2026-04-03 |
 
 ---
 
@@ -1133,11 +1136,142 @@ curl -s http://127.0.0.1:3456/v1/models | python3 -m json.tool
 
 ---
 
+## E28: SDK Param Passthrough
+
+**Verifies:** The live proxy accepts the new SDK passthrough fields (`effort`, `thinking`, `task_budget`, `anthropic-beta`) and still completes a normal Claude request. Exact option mapping is asserted by the integration tests in `src/__tests__/proxy-sdk-params.test.ts` and `src/__tests__/query-passthrough.test.ts`; this live test proves the real HTTP → proxy → SDK path does not reject or break on these fields.
+
+```bash
+curl -s http://127.0.0.1:3456/v1/messages \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: dummy" \
+  -H "x-opencode-session: e2e-sdk-params-001" \
+  -H "x-opencode-effort: high" \
+  -H "x-opencode-task-budget: 2000" \
+  -H "anthropic-beta: interleaved-thinking-2025-05-14" \
+  -d '{
+    "model": "claude-sonnet-4-5-20250514",
+    "max_tokens": 120,
+    "stream": false,
+    "thinking": {"type": "enabled", "budgetTokens": 1024},
+    "task_budget": {"total": 1000},
+    "messages": [{"role": "user", "content": "Reply with exactly: SDK_PARAMS_OK"}]
+  }' | python3 -m json.tool
+```
+
+**Pass criteria:**
+- Response is a valid Anthropic-format assistant message
+- Response is **not** a structured error
+- Proxy stderr shows a normal request log line (`model=... stream=false ...`)
+- Proxy stderr shows a `usage:` line after the request
+
+### Variant: malformed thinking override falls back cleanly
+
+```bash
+curl -s http://127.0.0.1:3456/v1/messages \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: dummy" \
+  -H "x-opencode-session: e2e-sdk-params-002" \
+  -H "x-opencode-thinking: not-valid-json{{{" \
+  -d '{
+    "model": "claude-sonnet-4-5-20250514",
+    "max_tokens": 120,
+    "stream": false,
+    "thinking": {"type": "enabled", "budgetTokens": 1024},
+    "messages": [{"role": "user", "content": "Reply with exactly: THINKING_FALLBACK_OK"}]
+  }' | python3 -m json.tool
+```
+
+**Pass criteria:**
+- Response succeeds with a normal assistant message (HTTP 200)
+- Proxy stderr contains `ignoring malformed x-opencode-thinking header`
+- Request still completes normally instead of failing with a 4xx/5xx
+
+---
+
+## E29: Context Usage Endpoint
+
+**Verifies:** A completed request stores token usage under the Claude SDK session ID returned by the proxy, and `/v1/sessions/:claudeSessionId/context-usage` returns it.
+
+```bash
+# 1. Make a request and capture response headers + body
+curl -sD /tmp/e2e-context-usage.headers \
+  -o /tmp/e2e-context-usage.body \
+  http://127.0.0.1:3456/v1/messages \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: dummy" \
+  -H "x-opencode-session: e2e-context-usage-001" \
+  -d '{
+    "model": "claude-sonnet-4-5-20250514",
+    "max_tokens": 80,
+    "stream": false,
+    "messages": [{"role": "user", "content": "Reply with exactly: CONTEXT_USAGE_OK"}]
+  }'
+
+# 2. Extract the Claude session ID the proxy returned
+CLAUDE_SESSION_ID=$(awk 'BEGIN{IGNORECASE=1} /^X-Claude-Session-ID:/ {print $2}' /tmp/e2e-context-usage.headers | tr -d '\r')
+echo "$CLAUDE_SESSION_ID"
+
+# 3. Query the usage endpoint
+curl -s http://127.0.0.1:3456/v1/sessions/$CLAUDE_SESSION_ID/context-usage | python3 -m json.tool
+```
+
+**Pass criteria:**
+- `CLAUDE_SESSION_ID` is non-empty
+- Endpoint returns HTTP 200
+- JSON contains `session_id` equal to the extracted Claude session ID
+- JSON contains `context_usage.input_tokens` and `context_usage.output_tokens`
+- Proxy stderr for the original request contains a `usage:` line
+
+---
+
+## E30: Context Usage via Fingerprint + Restart
+
+**Verifies:** The context-usage endpoint also works for sessions created **without** `x-opencode-session` (fingerprint fallback) and still works after restarting the proxy (shared session store persistence).
+
+```bash
+# 1. Make a headerless request and capture the returned Claude session ID
+curl -sD /tmp/e2e-context-fp.headers \
+  -o /tmp/e2e-context-fp.body \
+  http://127.0.0.1:3456/v1/messages \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: dummy" \
+  -d '{
+    "model": "claude-sonnet-4-5-20250514",
+    "max_tokens": 80,
+    "stream": false,
+    "messages": [{"role": "user", "content": "Reply with exactly: FP_CONTEXT_USAGE_OK"}]
+  }'
+
+CLAUDE_SESSION_ID=$(awk 'BEGIN{IGNORECASE=1} /^X-Claude-Session-ID:/ {print $2}' /tmp/e2e-context-fp.headers | tr -d '\r')
+echo "$CLAUDE_SESSION_ID"
+
+# 2. Query usage immediately (proves fingerprint-backed sessions are discoverable)
+curl -s http://127.0.0.1:3456/v1/sessions/$CLAUDE_SESSION_ID/context-usage | python3 -m json.tool
+
+# 3. Restart the proxy WITHOUT deleting ~/.cache/meridian/sessions.json
+kill $(lsof -ti :3456) 2>/dev/null
+sleep 2
+CLAUDE_PROXY_PORT=3456 bun run ./bin/cli.ts > /tmp/proxy-e2e.log 2>&1 &
+sleep 5
+
+# 4. Query usage again after restart (proves shared-store persistence)
+curl -s http://127.0.0.1:3456/v1/sessions/$CLAUDE_SESSION_ID/context-usage | python3 -m json.tool
+```
+
+**Pass criteria:**
+- Step 2 returns HTTP 200 for a request that had **no** `x-opencode-session` header
+- Step 4 also returns HTTP 200 after restart
+- Both responses contain `session_id` equal to the extracted Claude session ID
+- Both responses contain `context_usage.input_tokens` and `context_usage.output_tokens`
+- No need to replay the original request after restart — the lookup should work from persisted session data alone
+
+---
+
 ## Adding New E2E Tests
 
 When extending this document:
 
-1. **Assign an ID** — sequential `E22`, `E23`, etc.
+1. **Assign an ID** — use the next sequential `E##` number in the index.
 2. **Add to the index table** at the top with the date verified.
 3. **Include the exact curl/opencode command** — tests must be copy-pasteable.
 4. **Define pass criteria** — what to check in the response AND in the proxy log.
@@ -1187,10 +1321,10 @@ Which proxy modules each E2E test exercises:
 |--------|-------|
 | `server.ts` (orchestration) | All |
 | `session/lineage.ts` | E4, E5, E6, E7, E8, E9 |
-| `session/cache.ts` | E4, E5, E6, E7, E8, E9 |
-| `session/fingerprint.ts` | E9 |
-| `sessionStore.ts` | E8, E21 |
-| `query.ts` | All (builds SDK options) |
+| `session/cache.ts` | E4, E5, E6, E7, E8, E9, E29, E30 |
+| `session/fingerprint.ts` | E9, E30 |
+| `sessionStore.ts` | E8, E21, E30 |
+| `query.ts` | All (builds SDK options), especially E28 |
 | `adapter.ts` + `adapters/opencode.ts` | All E-tests, D3, D10 |
 | `adapters/droid.ts` | D1, D2, D4, D5, D6, D7, D8, D9 |
 | `adapters/crush.ts` | C1, C2, C3, C4, C5 |

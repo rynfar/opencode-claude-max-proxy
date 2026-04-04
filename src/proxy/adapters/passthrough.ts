@@ -134,11 +134,11 @@ export const passthroughAdapter: AgentAdapter = {
   },
 
   /**
-   * LiteLLM expects non-streaming (JSON) responses.
-   * Health checks don't send x-litellm-* headers, so we can't distinguish
-   * them from regular requests — non-streaming is safe for all LiteLLM traffic.
+   * Respect the client's stream parameter.
+   * LiteLLM sends stream=true for streaming requests and stream=false (or omits it)
+   * for non-streaming requests including health checks.
    */
-  prefersStreaming(_body: any): boolean {
-    return false
+  prefersStreaming(body: any): boolean {
+    return body?.stream === true
   },
 }

@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.27.0](https://github.com/rynfar/meridian/compare/v1.26.6...v1.27.0) (2026-04-04)
+
+
+### Features
+
+* add pi coding agent adapter ([#259](https://github.com/rynfar/meridian/issues/259)) ([b20585f](https://github.com/rynfar/meridian/commit/b20585f8287a56fb62e54a1e4d4ccf2e7f35033b))
+
 ## [1.26.6](https://github.com/rynfar/meridian/compare/v1.26.5...v1.26.6) (2026-04-03)
 
 

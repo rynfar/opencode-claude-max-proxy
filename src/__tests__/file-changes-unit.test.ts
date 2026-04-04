@@ -501,6 +501,21 @@ describe("openCodeAdapter.extractFileChangesFromToolUse", () => {
   it("should return empty for bash without redirects", () => {
     expect(openCodeAdapter.extractFileChangesFromToolUse!("bash", { command: "ls -la" })).toEqual([])
   })
+
+  it("should detect write with path parameter", () => {
+    const result = openCodeAdapter.extractFileChangesFromToolUse!("write", { path: "src/new.ts", content: "x" })
+    expect(result).toEqual([{ operation: "wrote", path: "src/new.ts" }])
+  })
+
+  it("should detect edit with path parameter", () => {
+    const result = openCodeAdapter.extractFileChangesFromToolUse!("edit", { path: "src/old.ts", oldString: "a", newString: "b" })
+    expect(result).toEqual([{ operation: "edited", path: "src/old.ts" }])
+  })
+
+  it("should prefer filePath over path", () => {
+    const result = openCodeAdapter.extractFileChangesFromToolUse!("write", { filePath: "correct.ts", path: "fallback.ts" })
+    expect(result).toEqual([{ operation: "wrote", path: "correct.ts" }])
+  })
 })
 
 describe("crushAdapter.extractFileChangesFromToolUse", () => {

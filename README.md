@@ -11,7 +11,7 @@
 
 ---
 
-Meridian turns your Claude Max subscription into a local Anthropic API. Any tool that speaks the Anthropic or OpenAI protocol — OpenCode, Crush, Cline, Aider, Open WebUI — connects to Meridian and gets Claude, powered by your existing subscription through the official Claude Code SDK.
+Meridian turns your Claude Max subscription into a local Anthropic API. Any tool that speaks the Anthropic or OpenAI protocol — OpenCode, Crush, Cline, Aider, Pi, Droid, Open WebUI — connects to Meridian and gets Claude, powered by your existing subscription through the official Claude Code SDK.
 
 > [!NOTE]
 > **Renamed from `opencode-claude-max-proxy`.** If you're upgrading, see [`MIGRATION.md`](MIGRATION.md) for the checklist. Your existing sessions, env vars, and agent configs all continue to work.
@@ -192,6 +192,49 @@ Point any OpenAI-compatible tool at `http://127.0.0.1:3456` with any API key val
 
 > **Note:** Multi-turn conversations work by packing prior turns into the system prompt. Each request is a fresh SDK session — OpenAI clients replay full history themselves and don't use Meridian's session resumption.
 
+### Pi
+
+Pi uses the `@mariozechner/pi-ai` library which supports a configurable `baseUrl` on the model. Add a provider-level override in `~/.pi/agent/models.json`:
+
+```json
+{
+  "anthropic": {
+    "baseUrl": "http://127.0.0.1:3456"
+  }
+}
+```
+
+Then start Meridian with the pi default adapter:
+
+```bash
+MERIDIAN_DEFAULT_AGENT=pi meridian
+```
+
+Pi mimics Claude Code's User-Agent, so automatic detection isn't possible. The `MERIDIAN_DEFAULT_AGENT` env var tells Meridian to use the pi adapter for all unrecognized requests. If you run other agents alongside pi, use the `x-meridian-agent: pi` header instead (requires pi-ai support for custom headers).
+
+### OpenClaw
+
+OpenClaw uses `@mariozechner/pi-ai` under the hood, so the pi adapter handles it with no additional code. Add a provider override in `~/.openclaw/openclaw.json`:
+
+```json
+{
+  "models": {
+    "providers": {
+      "anthropic": {
+        "baseUrl": "http://127.0.0.1:3456",
+        "apiKey": "dummy",
+        "models": [
+          { "id": "claude-sonnet-4-6", "name": "Claude Sonnet 4.6 (Meridian)" },
+          { "id": "claude-opus-4-6", "name": "Claude Opus 4.6 (Meridian)" }
+        ]
+      }
+    }
+  }
+}
+```
+
+Then start Meridian with the pi adapter: `MERIDIAN_DEFAULT_AGENT=pi meridian`
+
 ### Any Anthropic-compatible tool
 
 ```bash
@@ -209,6 +252,8 @@ export ANTHROPIC_BASE_URL=http://127.0.0.1:3456
 | [Cline](https://github.com/cline/cline) | ✅ Verified | Config (see above) — full tool support, file read/write/edit, bash, session resume |
 | [Aider](https://github.com/paul-gauthier/aider) | ✅ Verified | Env vars — file editing, streaming; `--no-stream` broken (litellm bug) |
 | [Open WebUI](https://github.com/open-webui/open-webui) | ✅ Verified | OpenAI-compatible endpoints — set base URL to `http://127.0.0.1:3456` |
+| [Pi](https://github.com/mariozechner/pi-coding-agent) | ✅ Verified | models.json config (see above) — requires `MERIDIAN_DEFAULT_AGENT=pi` |
+| [OpenClaw](https://github.com/openclaw/openclaw) | ✅ Verified | Provider config (see above) — uses pi adapter via `MERIDIAN_DEFAULT_AGENT=pi` |
 | [Continue](https://github.com/continuedev/continue) | 🔲 Untested | OpenAI-compatible endpoints should work — set `apiBase` to `http://127.0.0.1:3456` |
 
 Tested an agent or built a plugin? [Open an issue](https://github.com/rynfar/meridian/issues) and we'll add it.
@@ -224,6 +269,7 @@ src/proxy/
 │   ├── opencode.ts        ← OpenCode adapter
 │   ├── crush.ts           ← Crush adapter
 │   ├── droid.ts           ← Droid adapter
+│   ├── pi.ts              ← Pi adapter
 │   └── passthrough.ts     ← LiteLLM passthrough adapter
 ├── query.ts               ← SDK query options builder
 ├── errors.ts              ← Error classification
@@ -258,11 +304,13 @@ Sessions are stored in-memory (LRU) and persisted to `~/.cache/meridian/sessions
 
 Agents are identified from request headers automatically:
 
-| User-Agent prefix | Adapter |
+| Signal | Adapter |
 |---|---|
-| `Charm-Crush/` | Crush |
-| `factory-cli/` | Droid |
-| *(anything else)* | OpenCode (default) |
+| `x-meridian-agent` header | Explicit override (any adapter) |
+| `Charm-Crush/` User-Agent | Crush |
+| `factory-cli/` User-Agent | Droid |
+| `litellm/` UA or `x-litellm-*` headers | LiteLLM passthrough |
+| *(anything else)* | `MERIDIAN_DEFAULT_AGENT` env var, or OpenCode |
 
 ### Adding a New Agent
 
@@ -283,6 +331,7 @@ Implement the `AgentAdapter` interface in `src/proxy/adapters/`. See [`adapters/
 | `MERIDIAN_TELEMETRY_SIZE` | `CLAUDE_PROXY_TELEMETRY_SIZE` | `1000` | Telemetry ring buffer size |
 | `MERIDIAN_NO_FILE_CHANGES` | `CLAUDE_PROXY_NO_FILE_CHANGES` | unset | Disable "Files changed" summary in responses |
 | `MERIDIAN_SONNET_MODEL` | `CLAUDE_PROXY_SONNET_MODEL` | `sonnet[1m]`* | Force sonnet tier: `sonnet` (200k) or `sonnet[1m]` (1M). Set to `sonnet` if you hit 1M context rate limits |
+| `MERIDIAN_DEFAULT_AGENT` | — | `opencode` | Default adapter for unrecognized agents: `opencode`, `pi`, `crush`, `droid`, `passthrough`. Requires restart. |
 
 *`sonnet[1m]` requires Max subscription with Extra Usage enabled. Falls back to `sonnet` automatically if not available.
 

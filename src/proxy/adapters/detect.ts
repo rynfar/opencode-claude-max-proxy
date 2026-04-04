@@ -11,6 +11,18 @@ import { openCodeAdapter } from "./opencode"
 import { droidAdapter } from "./droid"
 import { crushAdapter } from "./crush"
 import { passthroughAdapter } from "./passthrough"
+import { piAdapter } from "./pi"
+
+const ADAPTER_MAP: Record<string, AgentAdapter> = {
+  opencode: openCodeAdapter,
+  droid: droidAdapter,
+  crush: crushAdapter,
+  passthrough: passthroughAdapter,
+  pi: piAdapter,
+}
+
+const defaultAdapter: AgentAdapter =
+  ADAPTER_MAP[process.env.MERIDIAN_DEFAULT_AGENT || ""] ?? openCodeAdapter
 
 /**
  * Detect LiteLLM requests via User-Agent or x-litellm-* headers.
@@ -29,12 +41,18 @@ function isLiteLLMRequest(c: Context): boolean {
  * Detect which agent adapter to use based on request headers.
  *
  * Detection rules (evaluated in order):
- * 1. User-Agent starts with "factory-cli/"  → Droid adapter
- * 2. User-Agent starts with "Charm-Crush/"  → Crush adapter
- * 3. litellm/* UA or x-litellm-* headers   → LiteLLM passthrough adapter
- * 4. Default                                → OpenCode adapter (backward compatible)
+ * 1. x-meridian-agent header               → explicit adapter override
+ * 2. User-Agent starts with "factory-cli/"  → Droid adapter
+ * 3. User-Agent starts with "Charm-Crush/"  → Crush adapter
+ * 4. litellm/* UA or x-litellm-* headers   → LiteLLM passthrough adapter
+ * 5. Default                                → MERIDIAN_DEFAULT_AGENT env var, or OpenCode
  */
 export function detectAdapter(c: Context): AgentAdapter {
+  const agentOverride = c.req.header("x-meridian-agent")
+  if (agentOverride && ADAPTER_MAP[agentOverride]) {
+    return ADAPTER_MAP[agentOverride]!
+  }
+
   const userAgent = c.req.header("user-agent") || ""
 
   if (userAgent.startsWith("factory-cli/")) {
@@ -49,5 +67,5 @@ export function detectAdapter(c: Context): AgentAdapter {
     return passthroughAdapter
   }
 
-  return openCodeAdapter
+  return defaultAdapter
 }

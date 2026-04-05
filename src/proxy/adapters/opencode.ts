@@ -101,7 +101,7 @@ export const openCodeAdapter: AgentAdapter = {
    */
   extractFileChangesFromToolUse(toolName: string, toolInput: unknown): FileChange[] {
     const input = toolInput as Record<string, unknown> | null | undefined
-    const filePath = input?.filePath ?? input?.file_path
+    const filePath = input?.filePath ?? input?.file_path ?? input?.path
 
     const lowerName = toolName.toLowerCase()
     if (lowerName === "write" && filePath) {

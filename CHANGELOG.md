@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.27.5](https://github.com/rynfar/meridian/compare/v1.27.4...v1.27.5) (2026-04-05)
+
+
+### Bug Fixes
+
+* replace global claude-code install with SDK cli.js shim in Dockerfile ([5391f14](https://github.com/rynfar/meridian/commit/5391f140bfb9262da2b387d841ffb0b5384627f7))
+
 ## [1.27.4](https://github.com/rynfar/meridian/compare/v1.27.3...v1.27.4) (2026-04-05)
 
 

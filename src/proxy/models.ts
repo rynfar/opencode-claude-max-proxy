@@ -125,39 +125,96 @@ export function hasExtendedContext(model: ClaudeModel): boolean {
   return model.endsWith("[1m]")
 }
 
-export async function getClaudeAuthStatusAsync(): Promise<ClaudeAuthStatus | null> {
-  // Return cached result if within TTL — use shorter TTL for failures to recover faster
-  const ttl = cachedAuthStatusIsFailure ? AUTH_STATUS_FAILURE_TTL_MS : AUTH_STATUS_CACHE_TTL_MS
-  if (cachedAuthStatusAt > 0 && Date.now() - cachedAuthStatusAt < ttl) {
-    // On failure, return last known good status (preserves subscription type for model selection)
-    return cachedAuthStatus ?? lastKnownGoodAuthStatus
-  }
-  if (cachedAuthStatusPromise) return cachedAuthStatusPromise
+/** Per-profile auth status cache for multi-account support */
+interface AuthCache {
+  status: ClaudeAuthStatus | null
+  lastKnownGood: ClaudeAuthStatus | null
+  at: number
+  isFailure: boolean
+  promise: Promise<ClaudeAuthStatus | null> | null
+  lastSuccessAt: number
+}
+const profileAuthCaches = new Map<string, AuthCache>()
 
-  cachedAuthStatusPromise = (async () => {
+/** Get the last successful auth check timestamp for a profile's env overrides */
+export function getAuthCacheInfo(envOverrides?: Record<string, string>): { lastCheckedAt: number; lastSuccessAt: number; isFailure: boolean } {
+  if (!envOverrides) {
+    return { lastCheckedAt: cachedAuthStatusAt, lastSuccessAt: cachedAuthStatusIsFailure ? 0 : cachedAuthStatusAt, isFailure: cachedAuthStatusIsFailure }
+  }
+  const key = JSON.stringify(envOverrides)
+  const cache = profileAuthCaches.get(key)
+  if (!cache) return { lastCheckedAt: 0, lastSuccessAt: 0, isFailure: false }
+  return { lastCheckedAt: cache.at, lastSuccessAt: cache.lastSuccessAt, isFailure: cache.isFailure }
+}
+
+function getAuthCache(key: string): AuthCache {
+  let cache = profileAuthCaches.get(key)
+  if (!cache) {
+    cache = { status: null, lastKnownGood: null, at: 0, isFailure: false, promise: null, lastSuccessAt: 0 }
+    profileAuthCaches.set(key, cache)
+  }
+  return cache
+}
+
+/**
+ * @param envOverrides - Optional env vars for per-profile auth (e.g. CLAUDE_CONFIG_DIR).
+ *   When undefined, uses the default (global) auth context.
+ */
+export async function getClaudeAuthStatusAsync(envOverrides?: Record<string, string>): Promise<ClaudeAuthStatus | null> {
+  // Use per-profile cache when env overrides are provided, else fall back to
+  // the legacy global cache for backward compatibility with existing tests.
+  const cacheKey = envOverrides ? JSON.stringify(envOverrides) : "__default__"
+  const isDefault = !envOverrides
+  const cache = isDefault ? null : getAuthCache(cacheKey)
+
+  // Read from the appropriate cache
+  const c_status = cache ? cache.status : cachedAuthStatus
+  const c_lastKnownGood = cache ? cache.lastKnownGood : lastKnownGoodAuthStatus
+  const c_at = cache ? cache.at : cachedAuthStatusAt
+  const c_isFailure = cache ? cache.isFailure : cachedAuthStatusIsFailure
+  let c_promise = cache ? cache.promise : cachedAuthStatusPromise
+
+  const ttl = c_isFailure ? AUTH_STATUS_FAILURE_TTL_MS : AUTH_STATUS_CACHE_TTL_MS
+  if (c_at > 0 && Date.now() - c_at < ttl) {
+    return c_status ?? c_lastKnownGood
+  }
+  if (c_promise) return c_promise
+
+  c_promise = (async () => {
     try {
-      const { stdout } = await exec("claude auth status", { timeout: 5000 })
+      const { stdout } = await exec("claude auth status", {
+        timeout: 5000,
+        ...(envOverrides ? { env: { ...process.env, ...envOverrides } } : {}),
+      })
       const parsed = JSON.parse(stdout) as ClaudeAuthStatus
-      cachedAuthStatus = parsed
-      lastKnownGoodAuthStatus = parsed
-      cachedAuthStatusAt = Date.now()
-      cachedAuthStatusIsFailure = false
+      if (cache) {
+        cache.status = parsed; cache.lastKnownGood = parsed
+        cache.at = Date.now(); cache.isFailure = false; cache.lastSuccessAt = Date.now()
+      } else {
+        cachedAuthStatus = parsed; lastKnownGoodAuthStatus = parsed
+        cachedAuthStatusAt = Date.now(); cachedAuthStatusIsFailure = false
+      }
       return parsed
     } catch {
-      // Short-lived negative cache: retry in 5s instead of 60s.
-      // Return last known good status so model selection doesn't degrade
-      // (e.g. sonnet[1m] → sonnet) during transient auth command failures.
-      cachedAuthStatusIsFailure = true
-      cachedAuthStatusAt = Date.now()
-      cachedAuthStatus = null
-      return lastKnownGoodAuthStatus
+      if (cache) {
+        cache.isFailure = true; cache.at = Date.now(); cache.status = null
+        return cache.lastKnownGood
+      } else {
+        cachedAuthStatusIsFailure = true; cachedAuthStatusAt = Date.now()
+        cachedAuthStatus = null
+        return lastKnownGoodAuthStatus
+      }
     }
   })()
 
+  if (cache) cache.promise = c_promise
+  else cachedAuthStatusPromise = c_promise
+
   try {
-    return await cachedAuthStatusPromise
+    return await c_promise
   } finally {
-    cachedAuthStatusPromise = null
+    if (cache) cache.promise = null
+    else cachedAuthStatusPromise = null
   }
 }
 
@@ -252,6 +309,7 @@ export function resetCachedClaudeAuthStatus(): void {
   cachedAuthStatusAt = 0
   cachedAuthStatusIsFailure = false
   cachedAuthStatusPromise = null
+  profileAuthCaches.clear()
 }
 
 /** Expire the auth status cache without clearing lastKnownGoodAuthStatus — for testing only.
@@ -260,6 +318,10 @@ export function resetCachedClaudeAuthStatus(): void {
 export function expireAuthStatusCache(): void {
   cachedAuthStatusAt = 0
   cachedAuthStatusPromise = null
+  for (const cache of profileAuthCaches.values()) {
+    cache.at = 0
+    cache.promise = null
+  }
 }
 
 /**

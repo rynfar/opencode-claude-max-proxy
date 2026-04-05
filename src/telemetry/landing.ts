@@ -4,6 +4,8 @@
  * Fetches /health and /telemetry/summary client-side for live data.
  */
 
+import { profileBarCss, profileBarHtml, profileBarJs } from "./profileBar"
+
 export const landingHtml = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -71,9 +73,11 @@ export const landingHtml = `<!DOCTYPE html>
   .footer { margin-top: 48px; padding-top: 24px; border-top: 1px solid var(--border);
     font-size: 11px; color: var(--muted); text-align: center; }
   .footer a { color: var(--violet); text-decoration: none; }
+` + profileBarCss + `
 </style>
 </head>
 <body>
+` + profileBarHtml + `
 <div class="container">
   <div class="header">
     <svg width="40" height="40" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -114,12 +118,13 @@ function render(h,s){
   o+='</div>';
   if(s.byModel&&Object.keys(s.byModel).length>0){o+='<div class="section"><div class="section-title">Models (24h)</div><div class="grid">';for(const[n,d]of Object.entries(s.byModel))o+=card(n,d.count,'avg '+ms(d.avgTotalMs),'');o+='</div></div>'}
   o+='<div class="section"><div class="section-title">Connect an Agent</div><div class="snippet"><div class="snippet-tabs"><div class="snippet-tab active" onclick="showTab(this,&apos;opencode&apos;)">OpenCode</div><div class="snippet-tab" onclick="showTab(this,&apos;crush&apos;)">Crush</div><div class="snippet-tab" onclick="showTab(this,&apos;generic&apos;)">Any Tool</div></div><div id="tab-opencode"><code>ANTHROPIC_API_KEY=x ANTHROPIC_BASE_URL=http://'+location.host+' opencode</code></div><div id="tab-crush" style="display:none"><code>'+JSON.stringify({providers:{meridian:{type:"anthropic",base_url:"http://"+location.host,api_key:"x",models:[{id:"claude-sonnet-4-5-20250514",name:"Sonnet 4.5"}]}}},null,2)+'</code></div><div id="tab-generic" style="display:none"><code>export ANTHROPIC_API_KEY=x\\nexport ANTHROPIC_BASE_URL=http://'+location.host+'</code></div></div></div>';
-  o+='<div class="links"><a href="/telemetry" class="link">\ud83d\udcca Telemetry</a><a href="/health" class="link">\ud83e\ude7a Health</a><a href="/telemetry/summary" class="link">\ud83d\udcc8 Stats API</a><a href="https://github.com/rynfar/meridian" class="link">\u2699\ufe0f GitHub</a></div>';
+  o+='<div class="links"><a href="/telemetry" class="link">\ud83d\udcca Telemetry</a><a href="/profiles" class="link">\ud83d\udc64 Profiles</a><a href="/health" class="link">\ud83e\ude7a Health</a><a href="/telemetry/summary" class="link">\ud83d\udcc8 Stats API</a><a href="https://github.com/rynfar/meridian" class="link">\u2699\ufe0f GitHub</a></div>';
   o+='<div class="footer">Meridian \u00b7 Built on the <a href="https://github.com/anthropics/claude-code-sdk-js">Claude Code SDK</a></div>';
   document.getElementById('content').innerHTML=o;
 }
 function showTab(el,id){document.querySelectorAll('.snippet-tab').forEach(t=>t.classList.remove('active'));el.classList.add('active');document.querySelectorAll('[id^="tab-"]').forEach(t=>t.style.display='none');document.getElementById('tab-'+id).style.display='block'}
 refresh();setInterval(refresh,10000);
+` + profileBarJs + `
 </script>
 </body>
 </html>`

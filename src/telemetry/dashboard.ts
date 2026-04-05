@@ -3,6 +3,8 @@
  * No framework, no build step, no CDN. Single self-contained page.
  */
 
+import { profileBarCss, profileBarHtml, profileBarJs } from "./profileBar"
+
 export const dashboardHtml = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -20,7 +22,7 @@ export const dashboardHtml = `<!DOCTYPE html>
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
-         background: var(--bg); color: var(--text); padding: 24px; line-height: 1.5; }
+         background: var(--bg); color: var(--text); padding: 0; line-height: 1.5; }
   h1 { font-size: 20px; font-weight: 600; margin-bottom: 4px; }
   .subtitle { color: var(--muted); font-size: 13px; margin-bottom: 24px; }
   .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 24px; }
@@ -79,9 +81,12 @@ export const dashboardHtml = `<!DOCTYPE html>
                 transition: all 0.15s; }
   .log-filter:hover { border-color: var(--accent); color: var(--text); }
   .log-filter.active { background: rgba(88,166,255,0.1); border-color: var(--accent); color: var(--accent); }
+` + profileBarCss + `
 </style>
 </head>
 <body>
+` + profileBarHtml + `
+<div style="padding:24px">
 <h1>Meridian</h1>
 <div class="subtitle">Request Performance Telemetry</div>
 
@@ -105,6 +110,8 @@ const $$ = s => document.querySelectorAll(s);
 let timer;
 let activeTab = 'requests';
 let activeLogFilter = 'all';
+
+
 
 function ms(v) {
   if (v == null) return '—';
@@ -327,6 +334,7 @@ $('#window').addEventListener('change', refresh);
 
 refresh();
 timer = setInterval(refresh, 5000);
+` + profileBarJs + `
 </script>
 </body>
 </html>`

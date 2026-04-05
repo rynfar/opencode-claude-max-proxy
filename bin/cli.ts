@@ -25,6 +25,7 @@ Usage: meridian [command] [options]
 Commands:
   (default)        Start the proxy server
   setup            Configure the OpenCode plugin (run once after install)
+  profile          Manage Claude account profiles (add, list, switch, remove)
   refresh-token    Refresh the Claude Code OAuth token
 
 Options:
@@ -38,6 +39,20 @@ Environment variables:
   MERIDIAN_IDLE_TIMEOUT_SECONDS     Idle timeout in seconds (default: 120)
 
 See https://github.com/rynfar/meridian for full documentation.`)
+  process.exit(0)
+}
+
+if (args[0] === "profile") {
+  const { profileAdd, profileList, profileRemove, profileSwitch, profileLogin, profileHelp } = await import("../src/proxy/profileCli")
+  const subcommand = args[1]
+  const profileId = args[2]
+
+  if (subcommand === "add" && profileId) profileAdd(profileId)
+  else if (subcommand === "list" || subcommand === "ls") profileList()
+  else if (subcommand === "remove" && profileId) profileRemove(profileId)
+  else if (subcommand === "switch" && profileId) await profileSwitch(profileId)
+  else if (subcommand === "login" && profileId) profileLogin(profileId)
+  else profileHelp()
   process.exit(0)
 }
 
@@ -89,6 +104,28 @@ const port = parseInt(process.env.MERIDIAN_PORT ?? process.env.CLAUDE_PROXY_PORT
 const host = process.env.MERIDIAN_HOST ?? process.env.CLAUDE_PROXY_HOST ?? "127.0.0.1"
 const idleTimeoutSeconds = parseInt(process.env.MERIDIAN_IDLE_TIMEOUT_SECONDS ?? process.env.CLAUDE_PROXY_IDLE_TIMEOUT_SECONDS ?? "120", 10)
 
+// Load profile configuration:
+//   1. MERIDIAN_PROFILES env var (JSON array) — takes precedence
+//   2. ~/.config/meridian/profiles.json — written by `meridian profile add`
+// fs/path/os imports removed — profile discovery now handled by the server
+
+// Profile config: only set from MERIDIAN_PROFILES env var.
+// When undefined, the server auto-discovers from ~/.config/meridian/profiles.json
+// on each request (so `meridian profile add` works without restart).
+type ProfileEntry = { id: string; type?: "claude-max" | "api"; claudeConfigDir?: string; apiKey?: string; baseUrl?: string }
+let profiles: ProfileEntry[] | undefined
+let defaultProfile: string | undefined
+try {
+  const raw = process.env.MERIDIAN_PROFILES
+  if (raw) {
+    profiles = JSON.parse(raw)
+    defaultProfile = process.env.MERIDIAN_DEFAULT_PROFILE || undefined
+  }
+  // No else — let the server auto-discover from disk
+} catch (e) {
+  console.error(`[meridian] Failed to parse MERIDIAN_PROFILES: ${e instanceof Error ? e.message : e}`)
+}
+
 export async function runCli(
   start = startProxyServer,
   runExec: typeof exec = exec
@@ -122,7 +159,14 @@ export async function runCli(
     console.error("\x1b[33m⚠ Could not verify Claude auth status. If requests fail, run: claude login\x1b[0m")
   }
 
-  const proxy = await start({ port, host, idleTimeoutSeconds })
+  // Enable disk auto-discovery when no MERIDIAN_PROFILES env var is set.
+  // This lets `meridian profile add` work without restarting the server.
+  if (!profiles) {
+    const { enableDiskProfileDiscovery } = await import("../src/proxy/profiles")
+    enableDiskProfileDiscovery()
+  }
+
+  const proxy = await start({ port, host, idleTimeoutSeconds, profiles, defaultProfile })
 
   // Handle EADDRINUSE — preserve CLI behavior of exiting on port conflict
   proxy.server.on("error", (error: NodeJS.ErrnoException) => {

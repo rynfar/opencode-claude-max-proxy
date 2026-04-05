@@ -1,4 +1,5 @@
 import type { Server } from "node:http"
+import type { ProfileConfig } from "./profiles"
 
 export interface ProxyConfig {
   port: number
@@ -6,6 +7,10 @@ export interface ProxyConfig {
   debug: boolean
   idleTimeoutSeconds: number
   silent: boolean
+  /** Named auth profiles for multi-account support */
+  profiles?: ProfileConfig[]
+  /** Default profile ID when no header is sent */
+  defaultProfile?: string
 }
 
 export interface ProxyInstance {
@@ -31,4 +36,6 @@ export const DEFAULT_PROXY_CONFIG: ProxyConfig = {
   debug: (process.env.MERIDIAN_DEBUG ?? process.env.CLAUDE_PROXY_DEBUG) === "1",
   idleTimeoutSeconds: 120,
   silent: false,
+  profiles: undefined,
+  defaultProfile: undefined,
 }

@@ -37,6 +37,7 @@ mock.module("../proxy/models", () => ({
   isClosedControllerError: () => false,
   recordExtendedContextUnavailable: () => {},
   isExtendedContextKnownUnavailable: () => false,
+  getAuthCacheInfo: () => ({ lastCheckedAt: 0, lastSuccessAt: 0, isFailure: false }),
 }))
 
 mock.module("@anthropic-ai/claude-agent-sdk", () => ({

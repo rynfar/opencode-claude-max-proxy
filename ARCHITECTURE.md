@@ -52,6 +52,8 @@ src/
 │   │   ├── fingerprint.ts     ← Conversation fingerprinting, client CWD extraction
 │   │   └── cache.ts           ← LRU session caches, lookup/store operations
 │   ├── sessionStore.ts        ← Shared file store (cross-proxy session resume)
+│   ├── profiles.ts            ← Multi-profile support: resolve, list, switch auth contexts (leaf)
+│   ├── profileCli.ts          ← CLI commands for profile management (leaf, I/O)
 │   ├── agentDefs.ts           ← Subagent definition extraction from tool descriptions
 │   ├── agentMatch.ts          ← Fuzzy agent name matching
 │   └── passthroughTools.ts    ← Tool forwarding mode (agent handles execution)
@@ -66,6 +68,8 @@ src/
 │   ├── routes.ts              ← Telemetry API endpoints
 │   ├── logStore.ts            ← Diagnostic log ring buffer
 │   ├── dashboard.ts           ← HTML dashboard
+│   ├── profileBar.ts          ← Shared profile switcher bar (injected into HTML pages)
+│   ├── profilePage.ts         ← Profile management page HTML
 │   └── types.ts               ← Telemetry types
 └── plugin/
     └── claude-max-headers.ts  ← OpenCode plugin for session header injection
@@ -88,6 +92,8 @@ server.ts (HTTP layer)
     ├── session/cache.ts ──► session/lineage.ts ──► messages.ts
     │                    ──► session/fingerprint.ts
     │                    ──► sessionStore.ts
+    ├── profiles.ts
+    ├── profileCli.ts
     ├── agentDefs.ts
     ├── agentMatch.ts
     ├── fileChanges.ts
@@ -102,7 +108,7 @@ server.ts (HTTP layer)
 
 2. **`session/cache.ts` owns all mutable session state.** No other module should create or manage LRU caches for sessions.
 
-3. **`errors.ts`, `models.ts`, `tools.ts`, `messages.ts` are leaf modules.** They must not import from `server.ts`, `session/`, or `adapter.ts`.
+3. **`errors.ts`, `models.ts`, `tools.ts`, `messages.ts`, `profiles.ts`, `profileCli.ts` are leaf modules.** They must not import from `server.ts`, `session/`, or `adapter.ts`.
 
 4. **`server.ts` is the only module that imports from Hono** or touches HTTP concerns.
 

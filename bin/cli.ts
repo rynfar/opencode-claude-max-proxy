@@ -112,8 +112,8 @@ const idleTimeoutSeconds = parseInt(process.env.MERIDIAN_IDLE_TIMEOUT_SECONDS ??
 // Profile config: only set from MERIDIAN_PROFILES env var.
 // When undefined, the server auto-discovers from ~/.config/meridian/profiles.json
 // on each request (so `meridian profile add` works without restart).
-type ProfileEntry = { id: string; type?: "claude-max" | "api"; claudeConfigDir?: string; apiKey?: string; baseUrl?: string }
-let profiles: ProfileEntry[] | undefined
+import type { ProfileConfig } from "../src/proxy/profiles"
+let profiles: ProfileConfig[] | undefined
 let defaultProfile: string | undefined
 try {
   const raw = process.env.MERIDIAN_PROFILES

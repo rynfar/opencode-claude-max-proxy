@@ -136,13 +136,13 @@ interface AuthCache {
 }
 const profileAuthCaches = new Map<string, AuthCache>()
 
-/** Get the last successful auth check timestamp for a profile's env overrides */
-export function getAuthCacheInfo(envOverrides?: Record<string, string>): { lastCheckedAt: number; lastSuccessAt: number; isFailure: boolean } {
-  if (!envOverrides) {
+/** Get the last successful auth check timestamp for a profile.
+ * @param profileId - Profile ID to look up (uses default cache when omitted) */
+export function getAuthCacheInfo(profileId?: string): { lastCheckedAt: number; lastSuccessAt: number; isFailure: boolean } {
+  if (!profileId) {
     return { lastCheckedAt: cachedAuthStatusAt, lastSuccessAt: cachedAuthStatusIsFailure ? 0 : cachedAuthStatusAt, isFailure: cachedAuthStatusIsFailure }
   }
-  const key = JSON.stringify(envOverrides)
-  const cache = profileAuthCaches.get(key)
+  const cache = profileAuthCaches.get(profileId)
   if (!cache) return { lastCheckedAt: 0, lastSuccessAt: 0, isFailure: false }
   return { lastCheckedAt: cache.at, lastSuccessAt: cache.lastSuccessAt, isFailure: cache.isFailure }
 }
@@ -157,15 +157,15 @@ function getAuthCache(key: string): AuthCache {
 }
 
 /**
- * @param envOverrides - Optional env vars for per-profile auth (e.g. CLAUDE_CONFIG_DIR).
+ * @param profileId - Profile ID for per-profile cache keying (e.g. "work", "personal").
  *   When undefined, uses the default (global) auth context.
+ * @param envOverrides - Optional env vars for per-profile auth (e.g. CLAUDE_CONFIG_DIR).
  */
-export async function getClaudeAuthStatusAsync(envOverrides?: Record<string, string>): Promise<ClaudeAuthStatus | null> {
-  // Use per-profile cache when env overrides are provided, else fall back to
+export async function getClaudeAuthStatusAsync(profileId?: string, envOverrides?: Record<string, string>): Promise<ClaudeAuthStatus | null> {
+  // Use per-profile cache when a profile ID is provided, else fall back to
   // the legacy global cache for backward compatibility with existing tests.
-  const cacheKey = envOverrides ? JSON.stringify(envOverrides) : "__default__"
-  const isDefault = !envOverrides
-  const cache = isDefault ? null : getAuthCache(cacheKey)
+  const isDefault = !profileId
+  const cache = isDefault ? null : getAuthCache(profileId!)
 
   // Read from the appropriate cache
   const c_status = cache ? cache.status : cachedAuthStatus

@@ -82,6 +82,8 @@ export const profileBarJs = `
     }
   });
 
+  function esc(s) { var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
   function loadProfiles() {
     fetch('/profiles/list').then(function(r) { return r.json(); }).then(function(data) {
       if (!data.profiles || data.profiles.length === 0) {
@@ -91,7 +93,7 @@ export const profileBarJs = `
       profileBar.classList.add('visible');
       var current = data.profiles.find(function(p) { return p.isActive; });
       profileSelect.innerHTML = data.profiles.map(function(p) {
-        return '<option value="' + p.id + '"' + (p.isActive ? ' selected' : '') + '>' + p.id + '</option>';
+        return '<option value="' + esc(p.id) + '"' + (p.isActive ? ' selected' : '') + '>' + esc(p.id) + '</option>';
       }).join('');
       if (current) profileType.textContent = current.type;
     }).catch(function() {});

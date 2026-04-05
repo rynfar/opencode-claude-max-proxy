@@ -7,10 +7,12 @@
  * This is a leaf module — no imports from server.ts or session/.
  */
 
-import { mkdirSync, existsSync, readdirSync, rmSync, readFileSync, writeFileSync } from "node:fs"
+import { mkdirSync, existsSync, rmSync, readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { execSync, spawnSync } from "node:child_process"
 import { homedir } from "node:os"
+import type { ProfileConfig } from "./profiles"
+import { setSetting } from "./settings"
 
 const PROFILES_DIR = join(homedir(), ".config", "meridian", "profiles")
 const CONFIG_FILE = join(homedir(), ".config", "meridian", "profiles.json")
@@ -23,23 +25,19 @@ function getProfileDir(id: string): string {
   return join(PROFILES_DIR, id)
 }
 
-interface ProfileEntry {
-  id: string
-  claudeConfigDir: string
-}
-
-function loadProfileConfig(): ProfileEntry[] {
+function loadProfileConfig(): ProfileConfig[] {
   if (!existsSync(CONFIG_FILE)) return []
   try {
     return JSON.parse(readFileSync(CONFIG_FILE, "utf-8"))
-  } catch {
+  } catch (err) {
+    console.warn(`[meridian] Failed to read ${CONFIG_FILE}: ${err instanceof Error ? err.message : err}`)
     return []
   }
 }
 
-function saveProfileConfig(profiles: ProfileEntry[]): void {
+function saveProfileConfig(profiles: ProfileConfig[]): void {
   ensureProfilesDir()
-  writeFileSync(CONFIG_FILE, JSON.stringify(profiles, null, 2) + "\n")
+  writeFileSync(CONFIG_FILE, JSON.stringify(profiles, null, 2) + "\n", { mode: 0o600 })
 }
 
 function getAuthStatus(configDir: string): { loggedIn: boolean; email?: string; subscriptionType?: string } {
@@ -50,7 +48,8 @@ function getAuthStatus(configDir: string): { loggedIn: boolean; email?: string; 
       stdio: ["pipe", "pipe", "pipe"],
     })
     return JSON.parse(result.toString())
-  } catch {
+  } catch (err) {
+    console.warn(`[meridian] Auth check failed for ${configDir}: ${err instanceof Error ? err.message : err}`)
     return { loggedIn: false }
   }
 }
@@ -66,6 +65,28 @@ export function profileAdd(id: string): void {
     console.error(`\x1b[31m✗ Profile "${id}" already exists.\x1b[0m`)
     console.error(`  Run: meridian profile list`)
     process.exit(1)
+  }
+
+  // Offer to import existing ~/.claude credentials if this is the first profile
+  // and the default config dir has valid, active auth
+  const defaultClaudeDir = join(homedir(), ".claude")
+  const alreadyImported = profiles.some(p => p.claudeConfigDir === defaultClaudeDir)
+  if (!alreadyImported) {
+    const defaultAuth = getAuthStatus(defaultClaudeDir)
+    if (defaultAuth.loggedIn) {
+      console.log(`\x1b[32m✓ Found existing Claude credentials (${defaultAuth.email}, ${defaultAuth.subscriptionType || "unknown"})\x1b[0m`)
+      const answer = promptYesNo(`  Import as profile "${id}"?`)
+      if (answer) {
+        profiles.push({ id, claudeConfigDir: defaultClaudeDir })
+        saveProfileConfig(profiles)
+        console.log(`\x1b[32m✓ Profile "${id}" imported — using ${defaultAuth.email}\x1b[0m`)
+        printEnvHint(profiles)
+        return
+      }
+      console.log()
+      console.log("  Skipped import — will create a fresh profile instead.")
+      console.log()
+    }
   }
 
   const configDir = getProfileDir(id)
@@ -132,7 +153,7 @@ export function profileList(): void {
 
   console.log("Profiles:\n")
   for (const p of profiles) {
-    const auth = getAuthStatus(p.claudeConfigDir)
+    const auth = getAuthStatus(p.claudeConfigDir ?? "")
     const status = auth.loggedIn
       ? `\x1b[32m✓ ${auth.email} (${auth.subscriptionType || "unknown"})\x1b[0m`
       : "\x1b[31m✗ not logged in\x1b[0m"
@@ -150,12 +171,12 @@ export function profileRemove(id: string): void {
     process.exit(1)
   }
 
-  const configDir = profiles[idx]!.claudeConfigDir
+  const configDir = profiles[idx]!.claudeConfigDir ?? ""
   profiles.splice(idx, 1)
   saveProfileConfig(profiles)
 
   // Remove the config directory
-  if (existsSync(configDir) && configDir.startsWith(PROFILES_DIR)) {
+  if (configDir && existsSync(configDir) && configDir.startsWith(PROFILES_DIR)) {
     rmSync(configDir, { recursive: true, force: true })
   }
 
@@ -166,8 +187,8 @@ export function profileRemove(id: string): void {
 }
 
 export async function profileSwitch(id: string): Promise<void> {
-  const port = process.env.MERIDIAN_PORT || "3456"
-  const host = process.env.MERIDIAN_HOST || "127.0.0.1"
+  const port = process.env.MERIDIAN_PORT ?? process.env.CLAUDE_PROXY_PORT ?? "3456"
+  const host = process.env.MERIDIAN_HOST ?? process.env.CLAUDE_PROXY_HOST ?? "127.0.0.1"
 
   try {
     const res = await fetch(`http://${host}:${port}/profiles/active`, {
@@ -178,6 +199,8 @@ export async function profileSwitch(id: string): Promise<void> {
     })
     const body = await res.json() as { success?: boolean; error?: string }
     if (body.success) {
+      // Also persist locally so it survives proxy restarts
+      setSetting("activeProfile", id)
       console.log(`\x1b[32m✓ Switched to profile: ${id}\x1b[0m`)
     } else {
       console.error(`\x1b[31m✗ ${body.error}\x1b[0m`)
@@ -212,15 +235,28 @@ export function profileLogin(id: string): void {
     process.exit(1)
   }
 
-  const auth = getAuthStatus(profile.claudeConfigDir)
+  const auth = getAuthStatus(profile.claudeConfigDir ?? "")
   if (auth.loggedIn) {
     console.log(`\x1b[32m✓ Profile "${id}" authenticated as ${auth.email}\x1b[0m`)
   }
 }
 
-function printEnvHint(_profiles: ProfileEntry[]): void {
+/** Synchronous Y/n prompt. Returns true for yes (default). */
+function promptYesNo(question: string): boolean {
+  // Spawn a tiny process that prints the prompt and reads one line
+  const result = spawnSync("node", ["-e", [
+    `process.stdout.write(${JSON.stringify(`${question} [Y/n] `)});`,
+    `const rl = require("readline").createInterface({ input: process.stdin });`,
+    `rl.once("line", (a) => { process.stdout.write(a); rl.close(); });`,
+    `rl.once("close", () => process.exit(0));`,
+  ].join("\n")], { stdio: ["inherit", "pipe", "inherit"] })
+  const answer = (result.stdout?.toString().trim() ?? "").toLowerCase()
+  return answer !== "n" && answer !== "no"
+}
+
+function printEnvHint(_profiles: ProfileConfig[]): void {
   console.log(`\x1b[90mConfig: ${CONFIG_FILE}\x1b[0m`)
-  console.log("\x1b[90mStart or restart Meridian to pick up profile changes.\x1b[0m")
+  console.log("\x1b[90mProfiles are picked up automatically — no restart needed.\x1b[0m")
 }
 
 export function profileHelp(): void {

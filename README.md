@@ -61,7 +61,69 @@ Meridian bridges that gap. It runs locally, accepts standard Anthropic API reque
 - **Auto token refresh** — expired OAuth tokens are refreshed automatically; requests continue without interruption
 - **Passthrough mode** — forward tool calls to the client instead of executing internally
 - **Multimodal** — images, documents, and file attachments pass through to Claude
+- **Multi-profile** — switch between Claude accounts instantly, no restart needed
 - **Telemetry dashboard** — real-time performance metrics at `/telemetry`
+
+## Multi-Profile Support
+
+Meridian can route requests to different Claude accounts. Each **profile** is a named auth context — a separate Claude login with its own OAuth tokens. Switch between personal and work accounts, or share a single Meridian instance across teams.
+
+### Adding profiles
+
+```bash
+# Add your personal account
+meridian profile add personal
+# → Opens browser for Claude login
+
+# Add your work account (sign out of claude.ai first, then sign into the work account)
+meridian profile add work
+```
+
+> **⚠ Important:** Claude's OAuth reuses your browser session. Before adding a second account, sign out of claude.ai and sign into the other account first.
+
+### Switching profiles
+
+```bash
+# CLI (while proxy is running)
+meridian profile switch work
+
+# Per-request header (any agent)
+curl -H "x-meridian-profile: work" ...
+```
+
+You can also switch profiles from the web UI at `http://127.0.0.1:3456/profiles` — a dropdown appears in the nav bar on all pages when profiles are configured.
+
+### Profile commands
+
+| Command | Description |
+|---------|-------------|
+| `meridian profile add <name>` | Add a profile and authenticate via browser |
+| `meridian profile list` | List profiles and auth status |
+| `meridian profile switch <name>` | Switch the active profile (requires running proxy) |
+| `meridian profile login <name>` | Re-authenticate an expired profile |
+| `meridian profile remove <name>` | Remove a profile and its credentials |
+
+### How it works
+
+Each profile stores its credentials in an isolated `CLAUDE_CONFIG_DIR` under `~/.config/meridian/profiles/<name>/`. When a request arrives, Meridian resolves the profile in priority order:
+
+1. `x-meridian-profile` request header (per-request override)
+2. Active profile (set via `meridian profile switch` or the web UI)
+3. First configured profile
+
+Session state is scoped per profile — switching accounts won't cross-contaminate conversation history.
+
+### Environment variable configuration
+
+For advanced setups (CI, Docker), profiles can also be provided via environment variable:
+
+```bash
+export MERIDIAN_PROFILES='[{"id":"personal","claudeConfigDir":"/path/to/config1"},{"id":"work","claudeConfigDir":"/path/to/config2"}]'
+export MERIDIAN_DEFAULT_PROFILE=personal
+meridian
+```
+
+When `MERIDIAN_PROFILES` is set, it takes precedence over disk-configured profiles. When unset, Meridian auto-discovers profiles from `~/.config/meridian/profiles.json` on each request.
 
 ## Agent Setup
 
@@ -282,8 +344,14 @@ src/proxy/
 │   ├── lineage.ts         ← Per-message hashing, mutation classification (pure)
 │   ├── fingerprint.ts     ← Conversation fingerprinting
 │   └── cache.ts           ← LRU session caches
+├── profiles.ts            ← Multi-profile: resolve, list, switch auth contexts
+├── profileCli.ts          ← CLI commands for profile management
 ├── sessionStore.ts        ← Cross-proxy file-based session persistence
 └── passthroughTools.ts    ← Tool forwarding mode
+telemetry/
+├── ...
+├── profileBar.ts          ← Shared profile switcher bar
+└── profilePage.ts         ← Profile management page
 plugin/
 └── meridian.ts            ← OpenCode plugin (session headers + agent mode)
 ```
@@ -333,6 +401,8 @@ Implement the `AgentAdapter` interface in `src/proxy/adapters/`. See [`adapters/
 | `MERIDIAN_NO_FILE_CHANGES` | `CLAUDE_PROXY_NO_FILE_CHANGES` | unset | Disable "Files changed" summary in responses |
 | `MERIDIAN_SONNET_MODEL` | `CLAUDE_PROXY_SONNET_MODEL` | `sonnet` | Sonnet context tier: `sonnet` (200k, default) or `sonnet[1m]` (1M, requires Extra Usage†) |
 | `MERIDIAN_DEFAULT_AGENT` | — | `opencode` | Default adapter for unrecognized agents: `opencode`, `pi`, `crush`, `droid`, `passthrough`. Requires restart. |
+| `MERIDIAN_PROFILES` | — | unset | JSON array of profile configs (overrides disk discovery). See [Multi-Profile Support](#multi-profile-support). |
+| `MERIDIAN_DEFAULT_PROFILE` | — | *(first profile)* | Default profile ID when no header is sent |
 
 †Sonnet 1M requires Extra Usage on all plans including Max ([docs](https://code.claude.com/docs/en/model-config#extended-context)). Opus 1M is included with Max/Team/Enterprise at no extra cost.
 
@@ -351,6 +421,9 @@ Implement the `AgentAdapter` interface in `src/proxy/adapters/`. See [`adapters/
 | `GET /telemetry/requests` | Recent request metrics (JSON) |
 | `GET /telemetry/summary` | Aggregate statistics (JSON) |
 | `GET /telemetry/logs` | Diagnostic logs (JSON) |
+| `GET /profiles` | Profile management page |
+| `GET /profiles/list` | List profiles with auth status (JSON) |
+| `POST /profiles/active` | Switch the active profile |
 
 Health response example:
 
@@ -371,6 +444,11 @@ Health response example:
 |---------|-------------|
 | `meridian` | Start the proxy server |
 | `meridian setup` | Configure the OpenCode plugin in `~/.config/opencode/opencode.json` |
+| `meridian profile add <name>` | Add a profile and authenticate via browser |
+| `meridian profile list` | List all profiles and their auth status |
+| `meridian profile switch <name>` | Switch the active profile (requires running proxy) |
+| `meridian profile login <name>` | Re-authenticate an expired profile |
+| `meridian profile remove <name>` | Remove a profile and its credentials |
 | `meridian refresh-token` | Manually refresh the Claude OAuth token (exits 0/1) |
 
 ## Programmatic API

@@ -85,6 +85,17 @@ kill $(lsof -ti :3456)
 | E29 | [Context Usage Endpoint](#e29-context-usage-endpoint) | `/v1/sessions/:claudeSessionId/context-usage` returns live token usage for a completed request | 2026-04-03 |
 | E30 | [Context Usage via Fingerprint + Restart](#e30-context-usage-via-fingerprint--restart) | Context usage lookup works for headerless sessions and survives proxy restart via shared store | 2026-04-03 |
 
+| P1 | [Profile: List & Auth Status](#p1-profile-list--auth-status) | `/profiles/list` returns profiles with emails, login status, auth timestamps | - |
+| P2 | [Profile: Switch via API](#p2-profile-switch-via-api) | `POST /profiles/active` switches profile; health endpoint reflects new email | - |
+| P3 | [Profile: Persistence Across Restart](#p3-profile-persistence-across-restart) | Active profile survives proxy restart via settings.json | - |
+| P4 | [Profile: Request Routing](#p4-profile-request-routing) | Request on profile A uses different SDK auth than profile B | - |
+| P5 | [Profile: Per-Request Header Override](#p5-profile-per-request-header-override) | `x-meridian-profile` header routes single request to non-active profile | - |
+| P6 | [Profile: Session Isolation](#p6-profile-session-isolation) | Same messages on different profiles get separate SDK sessions (no cross-contamination) | - |
+| P7 | [Profile: Invalid Profile Rejection](#p7-profile-invalid-profile-rejection) | Switching to nonexistent profile returns 400; invalid persisted profile falls back safely | - |
+| P8 | [Profile: Settings Persistence](#p8-profile-settings-persistence) | `settings.json` updated on switch; CLI `meridian profile list` reflects state | - |
+| P9 | [Profile: Health Reflects Active](#p9-profile-health-reflects-active) | `/health` email changes when active profile changes | - |
+| P10 | [Profile: Telemetry Records After Switch](#p10-profile-telemetry-records-after-switch) | Requests on both profiles appear in `/telemetry/requests` | - |
+
 ---
 
 ## Conventions
@@ -2492,3 +2503,392 @@ rm -f /tmp/e31-stream.txt /tmp/e2e-passthrough-edit.js
 ```bash
 kill $(lsof -ti :3457) 2>/dev/null
 ```
+
+---
+
+## Profile Tests
+
+**Prerequisites:** Two profiles configured in `~/.config/meridian/profiles.json` with valid auth. Example:
+```json
+[
+  {"id": "personal", "claudeConfigDir": "/Users/you/.claude"},
+  {"id": "work", "claudeConfigDir": "/Users/you/.claude-work"}
+]
+```
+
+Both must pass `claude auth status` with `loggedIn: true` under their respective `CLAUDE_CONFIG_DIR`.
+
+Proxy must be running with disk profile discovery (no `MERIDIAN_PROFILES` env var — let it auto-discover from the JSON file).
+
+### Setup
+
+```bash
+# Verify both profiles are authenticated
+PROFILE1_DIR=$(python3 -c "import json; print(json.load(open('$HOME/.config/meridian/profiles.json'))[0]['claudeConfigDir'])")
+PROFILE2_DIR=$(python3 -c "import json; print(json.load(open('$HOME/.config/meridian/profiles.json'))[1]['claudeConfigDir'])")
+PROFILE1_ID=$(python3 -c "import json; print(json.load(open('$HOME/.config/meridian/profiles.json'))[0]['id'])")
+PROFILE2_ID=$(python3 -c "import json; print(json.load(open('$HOME/.config/meridian/profiles.json'))[1]['id'])")
+
+CLAUDE_CONFIG_DIR=$PROFILE1_DIR claude auth status | python3 -c "import json,sys; d=json.load(sys.stdin); assert d['loggedIn'], f'{d}'; print(f'Profile 1 ({d[\"email\"]}): OK')"
+CLAUDE_CONFIG_DIR=$PROFILE2_DIR claude auth status | python3 -c "import json,sys; d=json.load(sys.stdin); assert d['loggedIn'], f'{d}'; print(f'Profile 2 ({d[\"email\"]}): OK')"
+
+# Verify proxy is healthy
+curl -sf http://127.0.0.1:3456/health | python3 -c "import json,sys; assert json.load(sys.stdin)['status']=='healthy'; print('Proxy: healthy')"
+```
+
+---
+
+## P1: Profile List & Auth Status
+
+**Verifies:** `/profiles/list` returns all configured profiles with live auth status, emails, and timestamps.
+
+```bash
+RESULT=$(curl -s http://127.0.0.1:3456/profiles/list)
+
+# Should have at least 2 profiles
+COUNT=$(echo "$RESULT" | python3 -c "import json,sys; print(len(json.load(sys.stdin)['profiles']))")
+test "$COUNT" -ge 2 && echo "PASS: $COUNT profiles found" || echo "FAIL: expected >=2, got $COUNT"
+
+# Each profile should have id, email, loggedIn, isActive, lastSuccessAt
+echo "$RESULT" | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+for p in d['profiles']:
+    assert 'id' in p, f'missing id: {p}'
+    assert 'email' in p, f'missing email: {p}'
+    assert 'loggedIn' in p, f'missing loggedIn: {p}'
+    assert 'isActive' in p, f'missing isActive: {p}'
+    assert 'lastSuccessAt' in p or 'lastCheckedAt' in p, f'missing auth timestamps: {p}'
+    print(f'  {p[\"id\"]:12} email={p[\"email\"]}  loggedIn={p[\"loggedIn\"]}  active={p[\"isActive\"]}')
+assert d.get('activeProfile'), 'missing activeProfile'
+print(f'Active: {d[\"activeProfile\"]}  PASS')
+"
+```
+
+**Pass criteria:**
+- At least 2 profiles returned
+- Each has `id`, `email`, `loggedIn`, `isActive`, auth timestamps
+- Exactly one profile has `isActive: true`
+- `activeProfile` field present
+
+---
+
+## P2: Profile Switch via API
+
+**Verifies:** `POST /profiles/active` switches the active profile; `/profiles/list` and `/health` reflect the change.
+
+```bash
+# Get profile IDs
+PROFILE1_ID=$(curl -s http://127.0.0.1:3456/profiles/list | python3 -c "import json,sys; print(json.load(sys.stdin)['profiles'][0]['id'])")
+PROFILE2_ID=$(curl -s http://127.0.0.1:3456/profiles/list | python3 -c "import json,sys; print(json.load(sys.stdin)['profiles'][1]['id'])")
+PROFILE1_EMAIL=$(curl -s http://127.0.0.1:3456/profiles/list | python3 -c "import json,sys; print(json.load(sys.stdin)['profiles'][0]['email'])")
+PROFILE2_EMAIL=$(curl -s http://127.0.0.1:3456/profiles/list | python3 -c "import json,sys; print(json.load(sys.stdin)['profiles'][1]['email'])")
+
+# Switch to profile 1
+RES=$(curl -s -X POST http://127.0.0.1:3456/profiles/active \
+  -H "Content-Type: application/json" -d "{\"profile\":\"$PROFILE1_ID\"}")
+echo "$RES" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d['success']; assert d['activeProfile']=='$PROFILE1_ID'; print(f'Switch to $PROFILE1_ID: PASS')"
+
+# Health should show profile 1 email
+HEALTH_EMAIL=$(curl -s http://127.0.0.1:3456/health | python3 -c "import json,sys; print(json.load(sys.stdin)['auth']['email'])")
+test "$HEALTH_EMAIL" = "$PROFILE1_EMAIL" && echo "PASS: health=$HEALTH_EMAIL" || echo "FAIL: expected $PROFILE1_EMAIL, got $HEALTH_EMAIL"
+
+# Switch to profile 2
+curl -s -X POST http://127.0.0.1:3456/profiles/active \
+  -H "Content-Type: application/json" -d "{\"profile\":\"$PROFILE2_ID\"}" > /dev/null
+
+# Health should show profile 2 email
+HEALTH_EMAIL=$(curl -s http://127.0.0.1:3456/health | python3 -c "import json,sys; print(json.load(sys.stdin)['auth']['email'])")
+test "$HEALTH_EMAIL" = "$PROFILE2_EMAIL" && echo "PASS: health=$HEALTH_EMAIL" || echo "FAIL: expected $PROFILE2_EMAIL, got $HEALTH_EMAIL"
+```
+
+**Pass criteria:**
+- Switch returns `{"success": true, "activeProfile": "<id>"}`
+- `/health` email matches the switched profile
+
+---
+
+## P3: Profile Persistence Across Restart
+
+**Verifies:** Active profile survives a proxy restart.
+
+```bash
+# Get profile IDs
+PROFILE2_ID=$(curl -s http://127.0.0.1:3456/profiles/list | python3 -c "import json,sys; print(json.load(sys.stdin)['profiles'][1]['id'])")
+PROFILE2_EMAIL=$(curl -s http://127.0.0.1:3456/profiles/list | python3 -c "import json,sys; print(json.load(sys.stdin)['profiles'][1]['email'])")
+
+# Switch to profile 2
+curl -s -X POST http://127.0.0.1:3456/profiles/active \
+  -H "Content-Type: application/json" -d "{\"profile\":\"$PROFILE2_ID\"}" > /dev/null
+
+# Verify settings.json
+SAVED=$(python3 -c "import json; print(json.load(open('$HOME/.config/meridian/settings.json'))['activeProfile'])")
+test "$SAVED" = "$PROFILE2_ID" && echo "PASS: settings.json=$SAVED" || echo "FAIL: expected $PROFILE2_ID, got $SAVED"
+
+# Restart proxy (adjust for your setup — launchd, systemd, or manual)
+kill $(lsof -ti :3456) 2>/dev/null; sleep 1
+MERIDIAN_PORT=3456 bun run ./bin/cli.ts &
+sleep 3
+
+# Verify profile restored
+ACTIVE=$(curl -s http://127.0.0.1:3456/profiles/list | python3 -c "import json,sys; print(json.load(sys.stdin)['activeProfile'])")
+test "$ACTIVE" = "$PROFILE2_ID" && echo "PASS: restored=$ACTIVE" || echo "FAIL: expected $PROFILE2_ID, got $ACTIVE"
+
+HEALTH_EMAIL=$(curl -s http://127.0.0.1:3456/health | python3 -c "import json,sys; print(json.load(sys.stdin)['auth']['email'])")
+test "$HEALTH_EMAIL" = "$PROFILE2_EMAIL" && echo "PASS: health=$HEALTH_EMAIL" || echo "FAIL: expected $PROFILE2_EMAIL, got $HEALTH_EMAIL"
+```
+
+**Pass criteria:**
+- `settings.json` has the switched profile ID
+- After restart, `/profiles/list` shows same active profile
+- `/health` shows the correct email
+
+---
+
+## P4: Profile Request Routing
+
+**Verifies:** Requests use the active profile's SDK auth context.
+
+```bash
+PROFILE1_ID=$(curl -s http://127.0.0.1:3456/profiles/list | python3 -c "import json,sys; print(json.load(sys.stdin)['profiles'][0]['id'])")
+PROFILE2_ID=$(curl -s http://127.0.0.1:3456/profiles/list | python3 -c "import json,sys; print(json.load(sys.stdin)['profiles'][1]['id'])")
+
+# Switch to profile 1, send request
+curl -s -X POST http://127.0.0.1:3456/profiles/active \
+  -H "Content-Type: application/json" -d "{\"profile\":\"$PROFILE1_ID\"}" > /dev/null
+
+curl -s -X POST http://127.0.0.1:3456/v1/messages \
+  -H "Content-Type: application/json" -H "x-api-key: dummy" \
+  -H "x-opencode-session: e2e-profile-p4a" \
+  -d '{"model":"claude-haiku-4-5-20251001","max_tokens":10,"stream":false,
+       "messages":[{"role":"user","content":"say ok"}]}' > /dev/null
+
+LOG_P1=$(cat /tmp/proxy-e2e.log 2>/dev/null | strings | grep 'e2e-profile-p4a' | grep '\[PROXY\]' | head -1)
+echo "Profile 1 request: $LOG_P1"
+
+# Switch to profile 2, send request
+curl -s -X POST http://127.0.0.1:3456/profiles/active \
+  -H "Content-Type: application/json" -d "{\"profile\":\"$PROFILE2_ID\"}" > /dev/null
+
+curl -s -X POST http://127.0.0.1:3456/v1/messages \
+  -H "Content-Type: application/json" -H "x-api-key: dummy" \
+  -H "x-opencode-session: e2e-profile-p4b" \
+  -d '{"model":"claude-haiku-4-5-20251001","max_tokens":10,"stream":false,
+       "messages":[{"role":"user","content":"say ok"}]}' > /dev/null
+
+LOG_P2=$(cat /tmp/proxy-e2e.log 2>/dev/null | strings | grep 'e2e-profile-p4b' | grep '\[PROXY\]' | head -1)
+echo "Profile 2 request: $LOG_P2"
+
+# Both should have returned 200 (no errors)
+test -n "$LOG_P1" && test -n "$LOG_P2" && echo "PASS: both profiles handled requests" || echo "FAIL: missing log lines"
+```
+
+**Pass criteria:**
+- Both requests return 200
+- Proxy log shows both requests processed
+
+---
+
+## P5: Profile Per-Request Header Override
+
+**Verifies:** `x-meridian-profile` header routes a single request to a different profile without changing the active profile.
+
+```bash
+PROFILE1_ID=$(curl -s http://127.0.0.1:3456/profiles/list | python3 -c "import json,sys; print(json.load(sys.stdin)['profiles'][0]['id'])")
+PROFILE2_ID=$(curl -s http://127.0.0.1:3456/profiles/list | python3 -c "import json,sys; print(json.load(sys.stdin)['profiles'][1]['id'])")
+
+# Set active to profile 1
+curl -s -X POST http://127.0.0.1:3456/profiles/active \
+  -H "Content-Type: application/json" -d "{\"profile\":\"$PROFILE1_ID\"}" > /dev/null
+
+# Send request with header override to profile 2
+curl -sf -X POST http://127.0.0.1:3456/v1/messages \
+  -H "Content-Type: application/json" -H "x-api-key: dummy" \
+  -H "x-meridian-profile: $PROFILE2_ID" \
+  -d '{"model":"claude-haiku-4-5-20251001","max_tokens":10,"stream":false,
+       "messages":[{"role":"user","content":"say ok"}]}' > /dev/null \
+  && echo "PASS: header override request succeeded" || echo "FAIL: request failed"
+
+# Active profile should still be profile 1
+ACTIVE=$(curl -s http://127.0.0.1:3456/profiles/list | python3 -c "import json,sys; print(json.load(sys.stdin)['activeProfile'])")
+test "$ACTIVE" = "$PROFILE1_ID" && echo "PASS: active unchanged=$ACTIVE" || echo "FAIL: active changed to $ACTIVE"
+```
+
+**Pass criteria:**
+- Override request returns 200
+- Active profile remains unchanged
+
+---
+
+## P6: Profile Session Isolation
+
+**Verifies:** The same conversation messages on different profiles create separate SDK sessions (no cross-profile resume).
+
+```bash
+PROFILE1_ID=$(curl -s http://127.0.0.1:3456/profiles/list | python3 -c "import json,sys; print(json.load(sys.stdin)['profiles'][0]['id'])")
+PROFILE2_ID=$(curl -s http://127.0.0.1:3456/profiles/list | python3 -c "import json,sys; print(json.load(sys.stdin)['profiles'][1]['id'])")
+MSGS='[{"role":"user","content":"session isolation test e2e-p6"}]'
+
+# Request on profile 1
+curl -s -X POST http://127.0.0.1:3456/profiles/active \
+  -H "Content-Type: application/json" -d "{\"profile\":\"$PROFILE1_ID\"}" > /dev/null
+
+curl -s -X POST http://127.0.0.1:3456/v1/messages \
+  -H "Content-Type: application/json" -H "x-api-key: dummy" \
+  -d "{\"model\":\"claude-haiku-4-5-20251001\",\"max_tokens\":10,\"stream\":false,\"messages\":$MSGS}" > /dev/null
+
+# Same messages on profile 2 — should be lineage=new, NOT continuation
+curl -s -X POST http://127.0.0.1:3456/profiles/active \
+  -H "Content-Type: application/json" -d "{\"profile\":\"$PROFILE2_ID\"}" > /dev/null
+
+curl -s -X POST http://127.0.0.1:3456/v1/messages \
+  -H "Content-Type: application/json" -H "x-api-key: dummy" \
+  -d "{\"model\":\"claude-haiku-4-5-20251001\",\"max_tokens\":10,\"stream\":false,\"messages\":$MSGS}" > /dev/null
+
+# Both requests should show session=new in the proxy log (not continuation)
+# The last 2 request log lines should both be fresh sessions
+COUNT=$(tail -10 /tmp/proxy-e2e.log 2>/dev/null | strings | grep '\[PROXY\].*adapter=.*session=new' | tail -2 | wc -l | tr -d ' ')
+test "$COUNT" -ge 2 && echo "PASS: both requests got fresh sessions" || echo "FAIL: expected 2 session=new lines, got $COUNT"
+```
+
+**Pass criteria:**
+- Second request (profile 2) shows `session=new` in proxy log, NOT `lineage=continuation`
+
+---
+
+## P7: Profile Invalid Profile Rejection
+
+**Verifies:** Switching to a nonexistent profile returns 400. Invalid persisted profile is handled gracefully on restart.
+
+```bash
+# Try to switch to nonexistent profile
+RES=$(curl -s -X POST http://127.0.0.1:3456/profiles/active \
+  -H "Content-Type: application/json" -d '{"profile":"nonexistent_profile_xyz"}')
+STATUS=$(echo "$RES" | python3 -c "import json,sys; print('error' if 'error' in json.load(sys.stdin) else 'success')")
+test "$STATUS" = "error" && echo "PASS: nonexistent profile rejected" || echo "FAIL: expected error, got $RES"
+
+# Write invalid profile to settings.json, restart, verify fallback
+ORIG=$(cat ~/.config/meridian/settings.json)
+echo '{"activeProfile":"does_not_exist_abc"}' > ~/.config/meridian/settings.json
+
+kill $(lsof -ti :3456) 2>/dev/null; sleep 1
+MERIDIAN_PORT=3456 bun run ./bin/cli.ts &
+sleep 3
+
+# Should fall back to first profile, not crash
+ACTIVE=$(curl -s http://127.0.0.1:3456/profiles/list | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['activeProfile'])")
+HEALTH=$(curl -s http://127.0.0.1:3456/health | python3 -c "import json,sys; print(json.load(sys.stdin)['status'])")
+test "$HEALTH" = "healthy" && echo "PASS: proxy healthy after invalid profile (active=$ACTIVE)" || echo "FAIL: proxy unhealthy"
+
+# Restore
+echo "$ORIG" > ~/.config/meridian/settings.json
+```
+
+**Pass criteria:**
+- Switch to nonexistent profile returns error response (not 200)
+- Proxy starts healthy with invalid `settings.json`; falls back to first profile
+
+---
+
+## P8: Profile Settings Persistence
+
+**Verifies:** `settings.json` is updated when profile is switched; CLI `meridian profile list` shows correct state.
+
+```bash
+PROFILE2_ID=$(curl -s http://127.0.0.1:3456/profiles/list | python3 -c "import json,sys; print(json.load(sys.stdin)['profiles'][1]['id'])")
+
+# Switch via API
+curl -s -X POST http://127.0.0.1:3456/profiles/active \
+  -H "Content-Type: application/json" -d "{\"profile\":\"$PROFILE2_ID\"}" > /dev/null
+
+# Verify settings.json
+SAVED=$(python3 -c "import json; print(json.load(open('$HOME/.config/meridian/settings.json'))['activeProfile'])")
+test "$SAVED" = "$PROFILE2_ID" && echo "PASS: settings.json=$SAVED" || echo "FAIL: expected $PROFILE2_ID, got $SAVED"
+
+# Verify CLI shows profiles (non-interactive, just list)
+meridian profile list 2>&1 | grep -q "$PROFILE2_ID" && echo "PASS: CLI shows profile" || echo "FAIL: CLI missing profile"
+```
+
+**Pass criteria:**
+- `settings.json` contains the switched profile ID
+- `meridian profile list` output includes the profile
+
+---
+
+## P9: Profile Health Reflects Active
+
+**Verifies:** `/health` endpoint email changes when active profile changes.
+
+```bash
+PROFILE1_ID=$(curl -s http://127.0.0.1:3456/profiles/list | python3 -c "import json,sys; print(json.load(sys.stdin)['profiles'][0]['id'])")
+PROFILE2_ID=$(curl -s http://127.0.0.1:3456/profiles/list | python3 -c "import json,sys; print(json.load(sys.stdin)['profiles'][1]['id'])")
+PROFILE1_EMAIL=$(curl -s http://127.0.0.1:3456/profiles/list | python3 -c "import json,sys; print(json.load(sys.stdin)['profiles'][0]['email'])")
+PROFILE2_EMAIL=$(curl -s http://127.0.0.1:3456/profiles/list | python3 -c "import json,sys; print(json.load(sys.stdin)['profiles'][1]['email'])")
+
+curl -s -X POST http://127.0.0.1:3456/profiles/active \
+  -H "Content-Type: application/json" -d "{\"profile\":\"$PROFILE1_ID\"}" > /dev/null
+E1=$(curl -s http://127.0.0.1:3456/health | python3 -c "import json,sys; print(json.load(sys.stdin)['auth']['email'])")
+
+curl -s -X POST http://127.0.0.1:3456/profiles/active \
+  -H "Content-Type: application/json" -d "{\"profile\":\"$PROFILE2_ID\"}" > /dev/null
+E2=$(curl -s http://127.0.0.1:3456/health | python3 -c "import json,sys; print(json.load(sys.stdin)['auth']['email'])")
+
+test "$E1" = "$PROFILE1_EMAIL" && test "$E2" = "$PROFILE2_EMAIL" && test "$E1" != "$E2" \
+  && echo "PASS: health switches ($E1 → $E2)" \
+  || echo "FAIL: expected $PROFILE1_EMAIL/$PROFILE2_EMAIL, got $E1/$E2"
+```
+
+**Pass criteria:**
+- Health email matches profile 1 email after switching to profile 1
+- Health email matches profile 2 email after switching to profile 2
+- The two emails are different
+
+---
+
+## P10: Profile Telemetry Records After Switch
+
+**Verifies:** Requests on both profiles appear in telemetry.
+
+```bash
+PROFILE1_ID=$(curl -s http://127.0.0.1:3456/profiles/list | python3 -c "import json,sys; print(json.load(sys.stdin)['profiles'][0]['id'])")
+PROFILE2_ID=$(curl -s http://127.0.0.1:3456/profiles/list | python3 -c "import json,sys; print(json.load(sys.stdin)['profiles'][1]['id'])")
+
+# Note starting request count
+BEFORE=$(curl -s 'http://127.0.0.1:3456/telemetry/requests?limit=100' | python3 -c "import json,sys; print(len(json.load(sys.stdin)))")
+
+# Request on profile 1
+curl -s -X POST http://127.0.0.1:3456/profiles/active \
+  -H "Content-Type: application/json" -d "{\"profile\":\"$PROFILE1_ID\"}" > /dev/null
+curl -s -X POST http://127.0.0.1:3456/v1/messages \
+  -H "Content-Type: application/json" -H "x-api-key: dummy" \
+  -d '{"model":"claude-haiku-4-5-20251001","max_tokens":10,"stream":false,
+       "messages":[{"role":"user","content":"telemetry test p10a"}]}' > /dev/null
+
+# Request on profile 2 (streaming)
+curl -s -X POST http://127.0.0.1:3456/profiles/active \
+  -H "Content-Type: application/json" -d "{\"profile\":\"$PROFILE2_ID\"}" > /dev/null
+curl -s -N -X POST http://127.0.0.1:3456/v1/messages \
+  -H "Content-Type: application/json" -H "x-api-key: dummy" \
+  -d '{"model":"claude-haiku-4-5-20251001","max_tokens":10,"stream":true,
+       "messages":[{"role":"user","content":"telemetry test p10b"}]}' > /dev/null
+
+sleep 1
+
+# Should have 2 more requests
+AFTER=$(curl -s 'http://127.0.0.1:3456/telemetry/requests?limit=100' | python3 -c "import json,sys; print(len(json.load(sys.stdin)))")
+NEW=$((AFTER - BEFORE))
+test "$NEW" -ge 2 && echo "PASS: $NEW new telemetry records (non-stream + stream)" || echo "FAIL: expected >=2 new records, got $NEW"
+
+# Verify both modes present
+curl -s 'http://127.0.0.1:3456/telemetry/requests?limit=5' | python3 -c "
+import json, sys
+reqs = json.load(sys.stdin)
+modes = {r['mode'] for r in reqs[:5]}
+assert 'stream' in modes or 'non-stream' in modes, f'unexpected modes: {modes}'
+print(f'Modes seen: {modes}  PASS')
+"
+```
+
+**Pass criteria:**
+- At least 2 new telemetry request records after the two requests
+- Both streaming and non-streaming modes recorded

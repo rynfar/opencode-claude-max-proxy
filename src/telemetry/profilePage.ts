@@ -156,6 +156,8 @@ async function refresh() {
   }
 }
 
+function esc(s) { var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
 function render(data) {
   const profiles = data.profiles || [];
   const active = data.activeProfile;
@@ -175,9 +177,9 @@ function render(data) {
     const isActive = p.id === active;
     html += '<div class="profile-card' + (isActive ? ' active' : '') + '">';
     html += '<div class="profile-card-header">';
-    html += '<span class="profile-name">' + p.id + '</span>';
+    html += '<span class="profile-name">' + esc(p.id) + '</span>';
     if (isActive) html += '<span class="profile-badge badge-active">active</span>';
-    html += '<span class="profile-badge badge-type">' + (p.type || 'claude-max') + '</span>';
+    html += '<span class="profile-badge badge-type">' + esc(p.type || 'claude-max') + '</span>';
     html += '</div>';
 
     html += '<div class="profile-details">';
@@ -187,11 +189,11 @@ function render(data) {
 
     if (p.email) {
       html += '<span class="detail-label">Email</span>';
-      html += '<span class="detail-value">' + p.email + '</span>';
+      html += '<span class="detail-value">' + esc(p.email) + '</span>';
     }
     if (p.subscriptionType) {
       html += '<span class="detail-label">Plan</span>';
-      html += '<span class="detail-value">' + p.subscriptionType + '</span>';
+      html += '<span class="detail-value">' + esc(p.subscriptionType) + '</span>';
     }
     if (p.lastSuccessAt) {
       html += '<span class="detail-label">Last Verified</span>';
@@ -211,14 +213,14 @@ function render(data) {
 
     html += '<div style="margin-top:10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">';
     html += '<span style="font-size:11px;color:var(--muted)">Login:</span> ';
-    html += '<code class="copy-cmd">meridian profile login ' + p.id + '</code>';
-    html += '<button class="copy-btn" data-cmd="meridian profile login ' + p.id + '" onclick="copyCmd(this)" title="Copy to clipboard">';
+    html += '<code class="copy-cmd">meridian profile login ' + esc(p.id) + '</code>';
+    html += '<button class="copy-btn" data-cmd="meridian profile login ' + esc(p.id) + '" onclick="copyCmd(this)" title="Copy to clipboard">';
     html += '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 010 1.5h-1.5a.25.25 0 00-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 00.25-.25v-1.5a.75.75 0 011.5 0v1.5A1.75 1.75 0 019.25 16h-7.5A1.75 1.75 0 010 14.25zM5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0114.25 11h-7.5A1.75 1.75 0 015 9.25zm1.75-.25a.25.25 0 00-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 00.25-.25v-7.5a.25.25 0 00-.25-.25z"/></svg>';
     html += '</button>';
     html += '</div>';
 
     if (!isActive) {
-      html += '<button class="switch-btn" onclick="switchProfile(&quot;'+p.id+'&quot;)">Switch to ' + p.id + '</button>';
+      html += '<button class="switch-btn" onclick="switchProfile(&quot;'+esc(p.id)+'&quot;)">Switch to ' + esc(p.id) + '</button>';
     } else {
       html += '<button class="switch-btn current" disabled>Currently active</button>';
     }

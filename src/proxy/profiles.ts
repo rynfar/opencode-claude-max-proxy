@@ -16,18 +16,36 @@
 import { existsSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import { homedir } from "node:os"
+import { setSetting, getSetting } from "./settings"
 
 const CONFIG_FILE = join(homedir(), ".config", "meridian", "profiles.json")
 
+/** Disk profile cache with short TTL so new profiles are picked up quickly */
+const DISK_CACHE_TTL_MS = 5_000
+let diskProfilesCache: ProfileConfig[] = []
+let diskProfilesCacheAt = 0
+
 /**
  * Load profiles from ~/.config/meridian/profiles.json.
- * Called on each request so new profiles are picked up without restart.
+ * Cached with a 5s TTL so new profiles are picked up without restart,
+ * while avoiding synchronous disk I/O on every request.
  */
 export function loadProfilesFromDisk(): ProfileConfig[] {
+  if (diskProfilesCacheAt > 0 && Date.now() - diskProfilesCacheAt < DISK_CACHE_TTL_MS) {
+    return diskProfilesCache
+  }
   try {
-    if (!existsSync(CONFIG_FILE)) return []
-    return JSON.parse(readFileSync(CONFIG_FILE, "utf-8"))
-  } catch {
+    if (!existsSync(CONFIG_FILE)) {
+      diskProfilesCache = []
+    } else {
+      diskProfilesCache = JSON.parse(readFileSync(CONFIG_FILE, "utf-8"))
+    }
+    diskProfilesCacheAt = Date.now()
+    return diskProfilesCache
+  } catch (err) {
+    console.warn(`[meridian] Failed to read ${CONFIG_FILE}: ${err instanceof Error ? err.message : err}`)
+    diskProfilesCacheAt = Date.now()
+    diskProfilesCache = []
     return []
   }
 }
@@ -61,10 +79,11 @@ let activeProfileId: string | undefined
 
 /**
  * Set the active profile. All requests without an explicit x-meridian-profile
- * header will use this profile.
+ * header will use this profile. Persisted to ~/.config/meridian/settings.json.
  */
 export function setActiveProfile(profileId: string): void {
   activeProfileId = profileId
+  setSetting("activeProfile", profileId)
 }
 
 /**
@@ -72,6 +91,31 @@ export function setActiveProfile(profileId: string): void {
  */
 export function getActiveProfileId(): string | undefined {
   return activeProfileId
+}
+
+/** Reset active profile — for testing only. */
+export function resetActiveProfile(): void {
+  activeProfileId = undefined
+}
+
+/**
+ * Load persisted active profile from settings. Called once at startup
+ * to restore the user's last selection. Only restores when disk
+ * discovery is enabled (i.e. real CLI startup, not tests).
+ * Validates the saved profile actually exists before restoring.
+ */
+export function restoreActiveProfile(configProfiles?: ProfileConfig[]): void {
+  if (activeProfileId) return // already set (e.g. by env var)
+  if (!diskDiscoveryEnabled) return // tests / programmatic usage — don't read disk
+  const saved = getSetting("activeProfile")
+  if (!saved) return
+  // Validate the saved profile exists in the effective profile list
+  const effective = getEffectiveProfiles(configProfiles)
+  if (effective.length === 0 || effective.some(p => p.id === saved)) {
+    activeProfileId = saved
+  } else {
+    console.warn(`[meridian] Saved active profile "${saved}" not found. Using default.`)
+  }
 }
 
 /**

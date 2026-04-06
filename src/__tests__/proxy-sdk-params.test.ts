@@ -146,17 +146,40 @@ describe("SDK param passthrough — header overrides", () => {
     expect(capturedOptions.taskBudget).toEqual({ total: 9999 })
   })
 
-  it("anthropic-beta header is stripped for claude-max profiles to prevent extra usage billing", async () => {
+  it("anthropic-beta header with free beta is forwarded for claude-max profiles", async () => {
+    // Free betas (prompt-caching, context-1m, etc.) must pass through so the
+    // SDK can use prompt caching and 1M context. Stripping them caused ~3x
+    // token consumption on long conversations.
     // See: https://github.com/rynfar/meridian/issues/278
     const app = createTestApp()
     await post(app, BASE_BODY, { "anthropic-beta": "context-1m-2025-08-07" })
+    expect(capturedOptions.betas).toEqual(["context-1m-2025-08-07"])
+  })
+
+  it("comma-separated anthropic-beta header forwards all free betas for claude-max", async () => {
+    const app = createTestApp()
+    await post(app, BASE_BODY, { "anthropic-beta": "context-1m-2025-08-07, interleaved-thinking-2025-05-14" })
+    expect(capturedOptions.betas).toEqual([
+      "context-1m-2025-08-07",
+      "interleaved-thinking-2025-05-14",
+    ])
+  })
+
+  it("billable anthropic-beta (extended-cache-ttl) IS stripped for claude-max", async () => {
+    const app = createTestApp()
+    await post(app, BASE_BODY, { "anthropic-beta": "extended-cache-ttl-2025-04-11" })
     expect(capturedOptions.betas).toBeUndefined()
   })
 
-  it("comma-separated anthropic-beta header is also stripped for claude-max", async () => {
+  it("mixed free + billable anthropic-beta: only billable stripped for claude-max", async () => {
     const app = createTestApp()
-    await post(app, BASE_BODY, { "anthropic-beta": "context-1m-2025-08-07, interleaved-thinking-2025-05-14" })
-    expect(capturedOptions.betas).toBeUndefined()
+    await post(app, BASE_BODY, {
+      "anthropic-beta": "prompt-caching-2024-07-31, extended-cache-ttl-2025-04-11, context-1m-2025-08-07",
+    })
+    expect(capturedOptions.betas).toEqual([
+      "prompt-caching-2024-07-31",
+      "context-1m-2025-08-07",
+    ])
   })
 
   it("anthropic-beta header is forwarded for api-type profiles", async () => {

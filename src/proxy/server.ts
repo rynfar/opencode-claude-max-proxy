@@ -27,6 +27,7 @@ import { getLastUserMessage } from "./messages"
 import { detectAdapter } from "./adapters/detect"
 import { buildQueryOptions, type QueryContext } from "./query"
 import { resolveProfile, listProfiles, setActiveProfile, getActiveProfileId, getEffectiveProfiles, restoreActiveProfile } from "./profiles"
+import { filterBetasForProfile, getBetaPolicyFromEnv } from "./betas"
 import { createFileChangeHook, extractFileChangesFromMessages, formatFileChangeSummary, type FileChange } from "./fileChanges"
 import {
   computeLineageHash,
@@ -262,14 +263,23 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
         const effortHeader = c.req.header("x-opencode-effort")
         const thinkingHeader = c.req.header("x-opencode-thinking")
         const taskBudgetHeader = c.req.header("x-opencode-task-budget")
-        // NOTE: anthropic-beta headers are intentionally NOT forwarded for
-        // claude-max profiles. These headers trigger API-key billing mode on
-        // Anthropic's servers, causing Max subscribers to be charged extra usage.
-        // Only forward betas for api-type profiles where they are valid.
+        // NOTE: anthropic-beta header filtering is delegated to `filterBetasForProfile`.
+        // Default policy (`allow-safe`) strips only betas known to trigger Extra-Usage
+        // billing (see BILLABLE_BETA_PREFIXES_ON_MAX in betas.ts). Free betas like
+        // prompt-caching, context-1m, fine-grained-tool-streaming, and
+        // interleaved-thinking pass through so the SDK's caching and 1M context
+        // continue to work — blanket stripping caused ~3x TTFB and ~3x token
+        // consumption on long conversations.
+        //
+        // Operators can override the policy at runtime via the MERIDIAN_BETA_POLICY
+        // env var: `strip-all` restores the pre-fix behaviour (kill switch),
+        // `allow-all` forwards everything unconditionally.
         // See: https://github.com/rynfar/meridian/issues/278
-        const betaHeader = profile.type === "api"
-          ? c.req.header("anthropic-beta")
-          : undefined
+        const rawBetaHeader = c.req.header("anthropic-beta")
+        const betaFilter = filterBetasForProfile(rawBetaHeader, profile.type, getBetaPolicyFromEnv())
+        if (betaFilter.stripped.length > 0) {
+          console.error(`[PROXY] ${requestMeta.requestId} stripped anthropic-beta(s) for Max profile: ${betaFilter.stripped.join(", ")}`)
+        }
 
         const effort = effortHeader
           || body.effort
@@ -286,12 +296,7 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
         const taskBudget = Number.isFinite(parsedBudget)
           ? { total: parsedBudget }
           : body.task_budget ? { total: body.task_budget.total ?? body.task_budget } : undefined
-        const betas = betaHeader
-          ? betaHeader.split(",").map((b: string) => b.trim()).filter(Boolean)
-          : undefined
-        if (!betaHeader && c.req.header("anthropic-beta")) {
-          console.error(`[PROXY] ${requestMeta.requestId} stripped anthropic-beta header (Max subscription — betas trigger extra usage billing)`)
-        }
+        const betas = betaFilter.forwarded
 
         // Session resume: look up cached Claude SDK session and classify mutation
         const agentSessionId = adapter.getSessionId(c)

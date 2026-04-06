@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.29.0](https://github.com/rynfar/meridian/compare/v1.28.1...v1.29.0) (2026-04-06)
+
+
+### Features
+
+* session recovery logging and endpoint for conversation restoration ([#283](https://github.com/rynfar/meridian/issues/283)) ([781e302](https://github.com/rynfar/meridian/commit/781e302f3b99d8443ca2fff711c274d3a2c9c335))
+
+
+### Bug Fixes
+
+* isolate session recovery tests in CI sequential run ([2812576](https://github.com/rynfar/meridian/commit/28125762285dacc0fb4900438f3af975d9faa1bd))
+* isolate session recovery tests in CI sequential run ([6c905ab](https://github.com/rynfar/meridian/commit/6c905ab7a23835ef67ffd222d481da09a079a0bd))
+* use positional comparison in lineage overlap to prevent false compaction ([#283](https://github.com/rynfar/meridian/issues/283)) ([85b5cd7](https://github.com/rynfar/meridian/commit/85b5cd7e9f6422a149b943918836b6a3baac60ff))
+* use positional comparison in lineage overlap to prevent false compaction ([#283](https://github.com/rynfar/meridian/issues/283)) ([1450cbd](https://github.com/rynfar/meridian/commit/1450cbd9f0513bd57b04df6d613d044af175ceaa))
+
 ## [1.27.6](https://github.com/rynfar/meridian/compare/v1.27.5...v1.27.6) (2026-04-05)
 
 

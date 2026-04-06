@@ -3,8 +3,7 @@ FROM oven/bun:1 AS build
 
 WORKDIR /app
 COPY package.json bun.lock* ./
-RUN --mount=type=cache,target=/root/.bun \
-    bun install
+RUN bun install
 
 COPY tsconfig.json* ./
 COPY bin/ ./bin/

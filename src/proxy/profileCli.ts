@@ -243,9 +243,11 @@ export function profileLogin(id: string): void {
 
 /** Synchronous Y/n prompt. Returns true for yes (default). */
 function promptYesNo(question: string): boolean {
-  // Spawn a tiny process that prints the prompt and reads one line
+  // Write the prompt to stderr (inherited → visible in terminal).
+  // Spawn a tiny node process to read one line from stdin and echo it to
+  // stdout (piped) so we can capture the answer without a readline dep here.
+  process.stderr.write(`${question} [Y/n] `)
   const result = spawnSync("node", ["-e", [
-    `process.stdout.write(${JSON.stringify(`${question} [Y/n] `)});`,
     `const rl = require("readline").createInterface({ input: process.stdin });`,
     `rl.once("line", (a) => { process.stdout.write(a); rl.close(); });`,
     `rl.once("close", () => process.exit(0));`,

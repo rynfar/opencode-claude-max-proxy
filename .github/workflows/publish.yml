@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   id-token: write
 
 jobs:
@@ -59,10 +59,21 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
+      - name: Create GitHub Release
+        if: steps.check.outputs.already_published == 'false'
+        run: |
+          gh release create "v${{ steps.check.outputs.version }}" \
+            --title "v${{ steps.check.outputs.version }}" \
+            --generate-notes \
+            --latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+
       - name: Summary
         run: |
           if [ "${{ steps.check.outputs.already_published }}" == "true" ]; then
             echo "### ⚠️ Skipped — v${{ steps.check.outputs.version }} already on npm" >> $GITHUB_STEP_SUMMARY
           else
             echo "### ✅ Published @rynfar/meridian@${{ steps.check.outputs.version }} to npm" >> $GITHUB_STEP_SUMMARY
+            echo "### 📦 Created GitHub Release v${{ steps.check.outputs.version }}" >> $GITHUB_STEP_SUMMARY
           fi

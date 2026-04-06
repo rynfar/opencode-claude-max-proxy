@@ -89,3 +89,24 @@ If you need to modify any of these, open an issue first — breaking changes aff
 - Commit format: `type: brief description`
 - Types: feat, fix, refactor, perf, test, docs, chore
 - No AI attribution lines
+
+## Releasing
+
+**Do NOT run `npm version` or `git push --tags` manually.**
+
+Releases are handled by a single GitHub Actions workflow:
+
+1. Go to **GitHub → Actions → "Release"**
+2. Click **"Run workflow"**
+3. Pick **patch / minor / major**
+4. Click the green button
+
+The workflow automatically:
+- Runs tests and builds
+- Bumps `package.json` via `npm version`
+- Commits and tags
+- Pushes to `main`
+- Publishes to npm with provenance
+- Creates a GitHub Release with auto-generated notes
+
+This keeps npm, GitHub Releases, and git tags in sync. Never publish manually.

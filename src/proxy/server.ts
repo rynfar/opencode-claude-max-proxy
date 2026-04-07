@@ -394,8 +394,8 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
         }).join(" → ")
         const lineageType = lineageResult.type === "diverged" && !cachedSession ? "new" : lineageResult.type
         const msgCount = Array.isArray(body.messages) ? body.messages.length : 0
-        const deferredCount = body.tools?.filter((t: any) => t.defer_loading)?.length ?? 0
-        const requestLogLine = `${requestMeta.requestId} adapter=${adapter.name} model=${model} stream=${stream} tools=${body.tools?.length ?? 0}${deferredCount > 0 ? ` deferred=${deferredCount}` : ""} lineage=${lineageType} session=${resumeSessionId?.slice(0, 8) || "new"}${isUndo && undoRollbackUuid ? ` rollback=${undoRollbackUuid.slice(0, 8)}` : ""}${agentMode ? ` agent=${agentMode}` : ""} active=${activeSessions}/${MAX_CONCURRENT_SESSIONS} msgCount=${msgCount}`
+        const toolCount = body.tools?.length ?? 0
+        const requestLogLine = `${requestMeta.requestId} adapter=${adapter.name} model=${model} stream=${stream} tools=${toolCount} lineage=${lineageType} session=${resumeSessionId?.slice(0, 8) || "new"}${isUndo && undoRollbackUuid ? ` rollback=${undoRollbackUuid.slice(0, 8)}` : ""}${agentMode ? ` agent=${agentMode}` : ""} active=${activeSessions}/${MAX_CONCURRENT_SESSIONS} msgCount=${msgCount}`
         console.error(`[PROXY] ${requestLogLine} msgs=${msgSummary}`)
         diagnosticLog.session(`${requestLogLine}`, requestMeta.requestId)
 
@@ -586,7 +586,15 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
         passthroughMcp = createPassthroughMcpServer(body.tools, adapter.getCoreToolNames?.())
       }
       const hasDeferredTools = passthroughMcp?.hasDeferredTools ?? false
-
+      // Count deferred tools: when auto-defer is active, non-core tools are deferred
+      const coreNames = adapter.getCoreToolNames?.()
+      const coreSet = coreNames ? new Set(coreNames.map(n => n.toLowerCase())) : undefined
+      const deferredToolCount = hasDeferredTools && Array.isArray(body.tools)
+        ? body.tools.filter((t: any) => t.defer_loading === true || (coreSet && !coreSet.has(String(t.name).toLowerCase()))).length
+        : 0
+      if (hasDeferredTools) {
+        console.error(`[PROXY] ${requestMeta.requestId} deferred=${deferredToolCount}/${toolCount} tools (core: ${coreNames?.join(",") ?? "none"})`)
+      }
 
       // In passthrough mode: block ALL tools, capture them for forwarding (agent-agnostic).
       // In normal mode: delegate hook construction to the adapter.
@@ -953,6 +961,8 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
             isResume,
             isPassthrough: passthrough,
             hasDeferredTools,
+            deferredToolCount: hasDeferredTools ? deferredToolCount : undefined,
+            toolCount,
             lineageType,
             messageCount: allMessages.length,
             sdkSessionId: currentSessionId || resumeSessionId,
@@ -1513,6 +1523,8 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
                   isResume,
                   isPassthrough: passthrough,
                   hasDeferredTools,
+                  deferredToolCount: hasDeferredTools ? deferredToolCount : undefined,
+                  toolCount,
                   lineageType,
                   messageCount: allMessages.length,
                   sdkSessionId: currentSessionId || resumeSessionId,
@@ -1630,6 +1642,8 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
           isResume: false,
           isPassthrough: envBool("PASSTHROUGH"),
           hasDeferredTools: undefined,
+          deferredToolCount: undefined,
+          toolCount: undefined,
           lineageType: undefined,
           messageCount: undefined,
           sdkSessionId: undefined,

@@ -279,7 +279,7 @@ function render(s, reqs, logs) {
       + '<td class="mono">' + ago(r.timestamp) + '</td>'
       + '<td>' + (r.adapter || '—') + '</td>'
       + '<td>' + (r.requestModel || r.model) + '<br><span style="font-size:10px;color:var(--muted)">' + r.model + '</span></td>'
-      + '<td>' + r.mode + (r.hasDeferredTools ? '<br><span style="font-size:10px;color:var(--purple)">deferred</span>' : '') + '</td>'
+      + '<td>' + r.mode + (r.hasDeferredTools ? '<br><span style="font-size:10px;color:var(--purple)">deferred ' + (r.deferredToolCount || '') + '/' + (r.toolCount || '?') + '</span>' : '') + '</td>'
       + '<td class="mono">' + sessionShort + ' ' + lineageBadge + '<br><span style="font-size:10px;color:var(--muted)">' + msgCount + ' msgs</span></td>'
       + '<td class="' + statusClass + '">' + statusText + '</td>'
       + '<td class="mono">' + ms(r.queueWaitMs) + '</td>'

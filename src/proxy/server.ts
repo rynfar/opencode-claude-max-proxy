@@ -24,6 +24,7 @@ import { checkPluginConfigured } from "./setup"
 import { mapModelToClaudeModel, resolveClaudeExecutableAsync, isClosedControllerError, getClaudeAuthStatusAsync, getAuthCacheInfo, hasExtendedContext, stripExtendedContext, recordExtendedContextUnavailable } from "./models"
 import { translateOpenAiToAnthropic, translateAnthropicToOpenAi, translateAnthropicSseEvent, buildModelList } from "./openai"
 import { getLastUserMessage } from "./messages"
+import { maybeScrubSystemContext, maybeScrubRequestBody } from "./sanitize"
 import { detectAdapter } from "./adapters/detect"
 import { buildQueryOptions, type QueryContext } from "./query"
 import { resolveProfile, listProfiles, setActiveProfile, getActiveProfileId, getEffectiveProfiles, restoreActiveProfile } from "./profiles"
@@ -273,7 +274,14 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
       // Hoist adapter detection before try so it's available in the catch block for telemetry
       const adapter = detectAdapter(c)
       try {
-        const body = await c.req.json()
+        let body = await c.req.json()
+
+        // Vendor-string sanitization (fork-only patch for OpenClaw users).
+        // Anthropic fingerprints "OpenClaw" in system/messages/tools.
+        // When MERIDIAN_SCRUB_VENDOR=openclaw is set, recursively rewrite
+        // /openclaw/gi -> AgentSystem across the entire request body.
+        // No-op when env var unset. See src/proxy/sanitize.ts for context.
+        body = maybeScrubRequestBody(body)
 
         // Validate required fields
         if (!Array.isArray(body.messages)) {
@@ -426,6 +434,12 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
         claudeLog("debug.agents", { names: validAgentNames, count: validAgentNames.length })
       }
       systemContext += adapter.buildSystemContextAddendum?.(body, sdkAgents) ?? ""
+
+      // Belt-and-suspenders scrub on systemContext after the adapter
+      // addendum, in case it reintroduced vendor references. No-op when
+      // MERIDIAN_SCRUB_VENDOR is unset or when maybeScrubRequestBody
+      // (above) already cleaned the body.
+      systemContext = maybeScrubSystemContext(systemContext)
 
 
 

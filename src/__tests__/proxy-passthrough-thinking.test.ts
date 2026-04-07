@@ -63,7 +63,7 @@ mock.module("@anthropic-ai/claude-agent-sdk", () => ({
   createSdkMcpServer: () => ({
     type: "sdk",
     name: "test",
-    instance: { tool: () => {} },
+    instance: { tool: () => {}, registerTool: () => ({}) },
   }),
 }))
 
@@ -73,7 +73,7 @@ mock.module("../logger", () => ({
 }))
 
 mock.module("../mcpTools", () => ({
-  createOpencodeMcpServer: () => ({ type: "sdk", name: "opencode", instance: { tool: () => {} } }),
+  createOpencodeMcpServer: () => ({ type: "sdk", name: "opencode", instance: { tool: () => {}, registerTool: () => ({}) } }),
 }))
 
 const { createProxyServer, clearSessionCache } = await import("../proxy/server")

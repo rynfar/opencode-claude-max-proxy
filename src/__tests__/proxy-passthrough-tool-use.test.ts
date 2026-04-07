@@ -42,7 +42,7 @@ mock.module("@anthropic-ai/claude-agent-sdk", () => ({
     type: "sdk",
     name: "test",
     // Provide a minimal instance that supports tool() registration
-    instance: { tool: () => {} },
+    instance: { tool: () => {}, registerTool: () => ({}) },
   }),
 }))
 

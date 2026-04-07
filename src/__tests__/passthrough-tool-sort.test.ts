@@ -7,7 +7,7 @@ mock.module("@anthropic-ai/claude-agent-sdk", () => ({
   createSdkMcpServer: () => ({
     type: "sdk",
     name: "test",
-    instance: { tool: () => {} },
+    instance: { tool: () => {}, registerTool: () => ({}) },
   }),
 }))
 

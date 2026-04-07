@@ -176,7 +176,7 @@ function render(s, reqs, logs) {
   // Count lineage types for badges
   const lineageCounts = {};
   for (const r of reqs) { const t = r.lineageType || 'unknown'; lineageCounts[t] = (lineageCounts[t] || 0) + 1; }
-  const logCounts = { session: 0, lineage: 0, error: 0 };
+  const logCounts = { session: 0, lineage: 0, error: 0, token: 0 };
   for (const l of logs) { if (logCounts[l.category] !== undefined) logCounts[l.category]++; }
 
   // Tabs
@@ -200,6 +200,20 @@ function render(s, reqs, logs) {
     + card('Proxy Overhead', ms(s.proxyOverhead.p50), 'p95: ' + ms(s.proxyOverhead.p95))
     + card('Queue Wait', ms(s.queueWait.p50), 'p95: ' + ms(s.queueWait.p95))
     + '</div>';
+
+  // Token usage cards
+  if (s.tokenUsage) {
+    const t = s.tokenUsage;
+    const fmtTok = n => n > 1000000 ? (n/1000000).toFixed(1) + 'M' : n > 1000 ? Math.round(n/1000) + 'k' : String(n);
+    html += '<div class="section"><div class="section-title">Token Usage</div></div>';
+    html += '<div class="cards">'
+      + card('Input Tokens', fmtTok(t.totalInputTokens), '')
+      + card('Output Tokens', fmtTok(t.totalOutputTokens), '')
+      + card('Cache Read', fmtTok(t.totalCacheReadTokens), '')
+      + card('Cache Write', fmtTok(t.totalCacheCreationTokens), '')
+      + card('Avg Cache Hit', (t.avgCacheHitRate * 100).toFixed(0) + '%', t.cacheMissOnResumeCount > 0 ? t.cacheMissOnResumeCount + ' cache miss on resume' : '')
+      + '</div>';
+  }
 
   // Model breakdown
   const models = Object.entries(s.byModel);
@@ -244,7 +258,7 @@ function render(s, reqs, logs) {
     + '<span><span class="legend-dot" style="background:var(--upstream)"></span>Response</span>'
     + '</div>'
     + '<table><thead><tr><th>Time</th><th>Adapter</th><th>Model</th><th>Mode</th><th>Session</th><th>Status</th>'
-    + '<th>Queue</th><th>Proxy</th><th>TTFB</th><th>Total</th><th>Waterfall</th></tr></thead><tbody>';
+    + '<th>Queue</th><th>Proxy</th><th>TTFB</th><th>Total</th><th>Tokens</th><th>Cache</th><th>Waterfall</th></tr></thead><tbody>';
 
   const maxTotal = Math.max(...reqs.map(r => r.totalDurationMs), 1);
 
@@ -272,6 +286,8 @@ function render(s, reqs, logs) {
       + '<td class="mono">' + ms(r.proxyOverheadMs) + '</td>'
       + '<td class="mono">' + ms(r.ttfbMs) + '</td>'
       + '<td class="mono">' + ms(r.totalDurationMs) + '</td>'
+      + '<td class="mono">' + (r.inputTokens != null ? (r.inputTokens > 1000 ? Math.round(r.inputTokens/1000) + 'k' : r.inputTokens) + ' in<br>' + (r.outputTokens > 1000 ? Math.round(r.outputTokens/1000) + 'k' : r.outputTokens || 0) + ' out' : '—') + '</td>'
+      + '<td class="mono">' + (r.cacheHitRate != null ? '<span style="color:' + (r.cacheHitRate > 0.5 ? 'var(--green)' : r.cacheHitRate > 0 ? 'var(--yellow)' : 'var(--red)') + '">' + Math.round(r.cacheHitRate * 100) + '%</span>' : '—') + '</td>'
       + '<td><div class="waterfall">'
       + '<div class="waterfall-seg queue" style="width:' + qW + 'px"></div>'
       + '<div class="waterfall-seg overhead" style="width:' + ohW + 'px"></div>'
@@ -292,6 +308,7 @@ function render(s, reqs, logs) {
     + '<span class="log-filter' + (activeLogFilter === 'session' ? ' active' : '') + '" data-filter="session" onclick="setLogFilter(&apos;session&apos;)" style="--accent:var(--blue)">Session<span class="tab-badge">' + logCounts.session + '</span></span>'
     + '<span class="log-filter' + (activeLogFilter === 'lineage' ? ' active' : '') + '" data-filter="lineage" onclick="setLogFilter(&apos;lineage&apos;)" style="--accent:var(--purple)">Lineage<span class="tab-badge">' + logCounts.lineage + '</span></span>'
     + '<span class="log-filter' + (activeLogFilter === 'error' ? ' active' : '') + '" data-filter="error" onclick="setLogFilter(&apos;error&apos;)" style="--accent:var(--red)">Error<span class="tab-badge">' + logCounts.error + '</span></span>'
+    + '<span class="log-filter' + (activeLogFilter === 'token' ? ' active' : '') + '" data-filter="token" onclick="setLogFilter(&apos;token&apos;)" style="--accent:var(--yellow)">Token<span class="tab-badge">' + logCounts.token + '</span></span>'
     + '</div>';
 
   if (logs.length === 0) {
@@ -303,7 +320,7 @@ function render(s, reqs, logs) {
 
     for (const log of logs) {
       const levelColor = {info:'var(--green)',warn:'var(--yellow)',error:'var(--red)'}[log.level] || 'var(--muted)';
-      const catColor = {session:'var(--blue)',lineage:'var(--purple)',error:'var(--red)',lifecycle:'var(--muted)'}[log.category] || 'var(--muted)';
+      const catColor = {session:'var(--blue)',lineage:'var(--purple)',error:'var(--red)',lifecycle:'var(--muted)',token:'var(--yellow)'}[log.category] || 'var(--muted)';
       const display = (activeLogFilter === 'all' || log.category === activeLogFilter) ? '' : 'display:none';
       html += '<tr class="log-row" data-category="' + log.category + '" style="' + display + '">'
         + '<td class="mono">' + ago(log.timestamp) + '</td>'

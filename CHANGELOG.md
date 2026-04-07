@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.31.2](https://github.com/rynfar/meridian/compare/meridian-v1.31.1...meridian-v1.31.2) (2026-04-07)
+
+
+### Bug Fixes
+
+* disable thinking at SDK level when strip-all removes thinking beta ([#313](https://github.com/rynfar/meridian/issues/313)) ([57b5cad](https://github.com/rynfar/meridian/commit/57b5cadd093e4224082c73de2059e6e4501e8d52))
+
 ## [1.31.1](https://github.com/rynfar/meridian/compare/meridian-v1.31.0...meridian-v1.31.1) (2026-04-07)
 
 

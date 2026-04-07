@@ -20,7 +20,8 @@ RUN deluser --remove-home node 2>/dev/null; \
     && mkdir -p /home/claude/.claude \
     && chown -R claude:claude /home/claude
 
-USER claude
+# Stay as root so the entrypoint can chown the volume on every startup.
+# The supervisor script drops to the claude user via su before running Meridian.
 WORKDIR /app
 
 COPY --from=build --chown=claude:claude /app/node_modules ./node_modules

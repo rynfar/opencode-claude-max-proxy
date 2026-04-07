@@ -584,7 +584,7 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
       if (passthrough && Array.isArray(body.tools) && body.tools.length > 0) {
         passthroughMcp = createPassthroughMcpServer(body.tools)
       }
-
+      const hasDeferredTools = passthroughMcp?.hasDeferredTools ?? false
 
 
       // In passthrough mode: block ALL tools, capture them for forwarding (agent-agnostic).
@@ -600,6 +600,9 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
             PreToolUse: [{
               matcher: "",  // Match ALL tools
               hooks: [async (input: any) => {
+                // Let the SDK handle ToolSearch internally for deferred tool loading.
+                // ToolSearch is filtered from the response stream below.
+                if (input.tool_name === "ToolSearch") return undefined
                 capturedToolUses.push({
                   id: input.tool_use_id,
                   name: stripMcpPrefix(input.tool_name),
@@ -672,7 +675,7 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
                 try {
                   for await (const event of query(buildQueryOptions({
                     prompt: makePrompt(), model, workingDirectory, systemContext, claudeExecutable,
-                    passthrough, stream: false, sdkAgents, passthroughMcp, cleanEnv: profileEnv,
+                    passthrough, stream: false, sdkAgents, passthroughMcp, cleanEnv: profileEnv, hasDeferredTools,
                     resumeSessionId, isUndo, undoRollbackUuid, sdkHooks, adapter, onStderr,
                     effort, thinking, taskBudget, betas,
                   }))) {
@@ -705,7 +708,7 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
                     yield* query(buildQueryOptions({
                       prompt: buildFreshPrompt(allMessages, stripCacheControl),
                       model, workingDirectory, systemContext, claudeExecutable,
-                      passthrough, stream: false, sdkAgents, passthroughMcp, cleanEnv: profileEnv,
+                      passthrough, stream: false, sdkAgents, passthroughMcp, cleanEnv: profileEnv, hasDeferredTools,
                       resumeSessionId: undefined, isUndo: false, undoRollbackUuid: undefined, sdkHooks, adapter, onStderr,
                       effort, thinking, taskBudget, betas,
                     }))
@@ -823,6 +826,11 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
                 } else {
                   for (const block of message.message.content) {
                     const b = block as unknown as Record<string, unknown>
+                    // Filter ToolSearch from non-streaming passthrough responses
+                    if (b.type === "tool_use" && (b as any).name === "ToolSearch") {
+                      claudeLog("passthrough.toolsearch_filtered", { mode: "non_stream" })
+                      continue
+                    }
                     // Strip thinking blocks — meaningless to non-native clients
                     if (passthrough && !adapter.supportsThinking?.() && (b.type === "thinking" || b.type === "redacted_thinking")) {
                       claudeLog("passthrough.thinking_stripped", { mode: "non_stream", type: b.type })
@@ -1051,7 +1059,7 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
                   try {
                     for await (const event of query(buildQueryOptions({
                       prompt: makePrompt(), model, workingDirectory, systemContext, claudeExecutable,
-                      passthrough, stream: true, sdkAgents, passthroughMcp, cleanEnv: profileEnv,
+                      passthrough, stream: true, sdkAgents, passthroughMcp, cleanEnv: profileEnv, hasDeferredTools,
                       resumeSessionId, isUndo, undoRollbackUuid, sdkHooks, adapter, onStderr,
                       effort, thinking, taskBudget, betas,
                     }))) {
@@ -1081,7 +1089,7 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
                       yield* query(buildQueryOptions({
                         prompt: buildFreshPrompt(allMessages, stripCacheControl),
                         model, workingDirectory, systemContext, claudeExecutable,
-                        passthrough, stream: true, sdkAgents, passthroughMcp, cleanEnv: profileEnv,
+                        passthrough, stream: true, sdkAgents, passthroughMcp, cleanEnv: profileEnv, hasDeferredTools,
                         resumeSessionId: undefined, isUndo: false, undoRollbackUuid: undefined, sdkHooks, adapter, onStderr,
                         effort, thinking, taskBudget, betas,
                       }))
@@ -1262,6 +1270,12 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
                         continue
                       }
                       if (block?.type === "tool_use" && typeof block.name === "string") {
+                        // Filter out ToolSearch — handled internally by the SDK
+                        // for deferred tool loading, not visible to the client.
+                        if (block.name === "ToolSearch") {
+                          if (eventIndex !== undefined) skipBlockIndices.add(eventIndex)
+                          continue
+                        }
                         if (passthrough && block.name.startsWith(PASSTHROUGH_MCP_PREFIX)) {
                           // Passthrough mode: SDK sent the name WITH the mcp__oc__ prefix.
                           // Strip it so OpenCode sees the bare tool name.

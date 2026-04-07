@@ -23,7 +23,9 @@ describe("tool configuration", () => {
   })
 
   it("CLAUDE_CODE_ONLY_TOOLS contains SDK-only tools", () => {
-    expect(CLAUDE_CODE_ONLY_TOOLS).toContain("ToolSearch")
+    // ToolSearch is intentionally NOT in CLAUDE_CODE_ONLY_TOOLS — it is used
+    // internally by the SDK for deferred tool loading and must not be blocked.
+    expect(CLAUDE_CODE_ONLY_TOOLS).not.toContain("ToolSearch")
     expect(CLAUDE_CODE_ONLY_TOOLS).toContain("EnterPlanMode")
     expect(CLAUDE_CODE_ONLY_TOOLS).toContain("EnterWorktree")
   })

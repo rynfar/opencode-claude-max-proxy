@@ -119,7 +119,9 @@ describe("crushAdapter tool configuration", () => {
     const incompatible = crushAdapter.getAgentIncompatibleTools()
     expect(incompatible).toContain("EnterPlanMode")
     expect(incompatible).toContain("ExitPlanMode")
-    expect(incompatible).toContain("ToolSearch")
+    // ToolSearch is intentionally NOT incompatible — it is used internally by the SDK
+    // for deferred tool loading and must not be blocked.
+    expect(incompatible).not.toContain("ToolSearch")
   })
 
   it("getMcpServerName returns 'crush'", () => {

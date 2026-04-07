@@ -10,7 +10,7 @@
  * not as an agent that handles tools internally.
  */
 
-import { describe, it, expect, mock, beforeEach } from "bun:test"
+import { describe, it, expect, mock, beforeEach, afterEach } from "bun:test"
 import {
   messageStart,
   textBlockStart,
@@ -88,9 +88,18 @@ async function readStreamFull(response: Response): Promise<string> {
 // ============================================================
 
 describe("Phase 2: SDK should not use internal tools", () => {
+  let savedPassthrough: string | undefined
+
   beforeEach(() => {
     mockMessages = []
     capturedQueryParams = null
+    savedPassthrough = process.env.MERIDIAN_PASSTHROUGH
+    process.env.MERIDIAN_PASSTHROUGH = "0"
+  })
+
+  afterEach(() => {
+    if (savedPassthrough !== undefined) process.env.MERIDIAN_PASSTHROUGH = savedPassthrough
+    else delete process.env.MERIDIAN_PASSTHROUGH
   })
 
   it("should use maxTurns: 200 for multi-turn tool execution", async () => {
@@ -158,10 +167,19 @@ describe("Phase 2: SDK should not use internal tools", () => {
 })
 
 describe("Phase 2: Message format preservation", () => {
+  let savedPassthrough: string | undefined
+
   beforeEach(() => {
     mockMessages = []
     capturedQueryParams = null
     clearSessionCache()
+    savedPassthrough = process.env.MERIDIAN_PASSTHROUGH
+    process.env.MERIDIAN_PASSTHROUGH = "0"
+  })
+
+  afterEach(() => {
+    if (savedPassthrough !== undefined) process.env.MERIDIAN_PASSTHROUGH = savedPassthrough
+    else delete process.env.MERIDIAN_PASSTHROUGH
   })
 
   it("should pass system prompt via appendSystemPrompt, not merged into messages", async () => {

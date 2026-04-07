@@ -11,7 +11,7 @@
  * 3. Emit exactly one message_start and one message_stop
  */
 
-import { describe, it, expect, mock, beforeEach } from "bun:test"
+import { describe, it, expect, mock, beforeEach, afterEach } from "bun:test"
 import {
   messageStart,
   textBlockStart,
@@ -77,9 +77,18 @@ async function postStream(app: any, content: string) {
 }
 
 describe("Streaming: single message per response", () => {
+  let savedPassthrough: string | undefined
+
   beforeEach(() => {
     mockMessages = []
     clearSessionCache()
+    savedPassthrough = process.env.MERIDIAN_PASSTHROUGH
+    process.env.MERIDIAN_PASSTHROUGH = "0"
+  })
+
+  afterEach(() => {
+    if (savedPassthrough !== undefined) process.env.MERIDIAN_PASSTHROUGH = savedPassthrough
+    else delete process.env.MERIDIAN_PASSTHROUGH
   })
 
   it("should emit exactly one message_start for multi-turn SDK responses", async () => {
@@ -290,9 +299,18 @@ describe("Streaming: single message per response", () => {
 })
 
 describe("Default streaming behavior", () => {
+  let savedPassthrough: string | undefined
+
   beforeEach(() => {
     mockMessages = []
     clearSessionCache()
+    savedPassthrough = process.env.MERIDIAN_PASSTHROUGH
+    process.env.MERIDIAN_PASSTHROUGH = "0"
+  })
+
+  afterEach(() => {
+    if (savedPassthrough !== undefined) process.env.MERIDIAN_PASSTHROUGH = savedPassthrough
+    else delete process.env.MERIDIAN_PASSTHROUGH
   })
 
   it("should return JSON (non-streaming) when stream field is omitted", async () => {

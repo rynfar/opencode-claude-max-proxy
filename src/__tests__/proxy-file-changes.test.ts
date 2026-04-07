@@ -123,10 +123,19 @@ async function postStream(app: any, body: any) {
 }
 
 describe("File change visibility: PostToolUse hook registration", () => {
+  let savedPassthrough: string | undefined
+
   beforeEach(() => {
     mockMessages = [assistantMessage([{ type: "text", text: "Done" }])]
     capturedQueryParams = null
     clearSessionCache()
+    savedPassthrough = process.env.MERIDIAN_PASSTHROUGH
+    process.env.MERIDIAN_PASSTHROUGH = "0"
+  })
+
+  afterEach(() => {
+    if (savedPassthrough !== undefined) process.env.MERIDIAN_PASSTHROUGH = savedPassthrough
+    else delete process.env.MERIDIAN_PASSTHROUGH
   })
 
   it("should register PostToolUse hooks in SDK options", async () => {
@@ -198,10 +207,19 @@ describe("File change visibility: PostToolUse hook registration", () => {
 })
 
 describe("File change visibility: non-streaming response", () => {
+  let savedPassthrough: string | undefined
+
   beforeEach(() => {
     mockMessages = []
     capturedQueryParams = null
     clearSessionCache()
+    savedPassthrough = process.env.MERIDIAN_PASSTHROUGH
+    process.env.MERIDIAN_PASSTHROUGH = "0"
+  })
+
+  afterEach(() => {
+    if (savedPassthrough !== undefined) process.env.MERIDIAN_PASSTHROUGH = savedPassthrough
+    else delete process.env.MERIDIAN_PASSTHROUGH
   })
 
   it("should append file change summary to response when files are written", async () => {
@@ -312,10 +330,19 @@ describe("File change visibility: non-streaming response", () => {
 })
 
 describe("File change visibility: streaming response", () => {
+  let savedPassthrough: string | undefined
+
   beforeEach(() => {
     mockMessages = []
     capturedQueryParams = null
     clearSessionCache()
+    savedPassthrough = process.env.MERIDIAN_PASSTHROUGH
+    process.env.MERIDIAN_PASSTHROUGH = "0"
+  })
+
+  afterEach(() => {
+    if (savedPassthrough !== undefined) process.env.MERIDIAN_PASSTHROUGH = savedPassthrough
+    else delete process.env.MERIDIAN_PASSTHROUGH
   })
 
   it("should emit file change text block before message_stop in stream", async () => {
@@ -441,6 +468,7 @@ describe("File change visibility: streaming response", () => {
 describe("File change visibility: MERIDIAN_NO_FILE_CHANGES opt-out", () => {
   let origMeridian: string | undefined
   let origClaude: string | undefined
+  let savedPassthrough: string | undefined
 
   beforeEach(() => {
     mockMessages = []
@@ -448,6 +476,8 @@ describe("File change visibility: MERIDIAN_NO_FILE_CHANGES opt-out", () => {
     clearSessionCache()
     origMeridian = process.env.MERIDIAN_NO_FILE_CHANGES
     origClaude = process.env.CLAUDE_PROXY_NO_FILE_CHANGES
+    savedPassthrough = process.env.MERIDIAN_PASSTHROUGH
+    process.env.MERIDIAN_PASSTHROUGH = "0"
   })
 
   afterEach(() => {
@@ -455,6 +485,8 @@ describe("File change visibility: MERIDIAN_NO_FILE_CHANGES opt-out", () => {
     else delete process.env.MERIDIAN_NO_FILE_CHANGES
     if (origClaude !== undefined) process.env.CLAUDE_PROXY_NO_FILE_CHANGES = origClaude
     else delete process.env.CLAUDE_PROXY_NO_FILE_CHANGES
+    if (savedPassthrough !== undefined) process.env.MERIDIAN_PASSTHROUGH = savedPassthrough
+    else delete process.env.MERIDIAN_PASSTHROUGH
   })
 
   it("should suppress PostToolUse hook registration when MERIDIAN_NO_FILE_CHANGES=1", async () => {

@@ -10,7 +10,7 @@
  * Related: https://github.com/rynfar/meridian/issues/XXX
  */
 
-import { describe, it, expect, mock, beforeEach } from "bun:test"
+import { describe, it, expect, mock, beforeEach, afterEach } from "bun:test"
 
 // Track how many times createOpencodeMcpServer is called and what's passed to query
 let mcpServerCreateCount = 0
@@ -76,10 +76,19 @@ const BASIC_REQUEST = {
 }
 
 describe("MCP server per-request lifecycle", () => {
+  let savedPassthrough: string | undefined
+
   beforeEach(() => {
     mcpServerCreateCount = 0
     capturedMcpServers = []
     clearSessionCache()
+    savedPassthrough = process.env.MERIDIAN_PASSTHROUGH
+    process.env.MERIDIAN_PASSTHROUGH = "0"
+  })
+
+  afterEach(() => {
+    if (savedPassthrough !== undefined) process.env.MERIDIAN_PASSTHROUGH = savedPassthrough
+    else delete process.env.MERIDIAN_PASSTHROUGH
   })
 
   it("should create a new MCP server for each non-streaming request", async () => {

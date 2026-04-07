@@ -6,7 +6,7 @@
  * Non-MCP tools (Task, delegate_task, etc.) MUST be forwarded.
  */
 
-import { describe, it, expect, mock, beforeEach } from "bun:test"
+import { describe, it, expect, mock, beforeEach, afterEach } from "bun:test"
 import {
   messageStart,
   textBlockStart,
@@ -71,8 +71,17 @@ async function postStream(app: any, content: string) {
 }
 
 describe("MCP tool filtering: internal tools hidden from client", () => {
+  let savedPassthrough: string | undefined
+
   beforeEach(() => {
     mockMessages = []
+    savedPassthrough = process.env.MERIDIAN_PASSTHROUGH
+    process.env.MERIDIAN_PASSTHROUGH = "0"
+  })
+
+  afterEach(() => {
+    if (savedPassthrough !== undefined) process.env.MERIDIAN_PASSTHROUGH = savedPassthrough
+    else delete process.env.MERIDIAN_PASSTHROUGH
   })
 
   it("should filter out mcp__opencode__* tool_use blocks", async () => {

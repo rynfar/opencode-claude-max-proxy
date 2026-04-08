@@ -30,6 +30,7 @@ import { resolveProfile, listProfiles, setActiveProfile, getActiveProfileId, get
 import { filterBetasForProfile, getBetaPolicyFromEnv } from "./betas"
 import { createFileChangeHook, extractFileChangesFromMessages, formatFileChangeSummary, type FileChange } from "./fileChanges"
 import { detectTokenAnomalies, formatAnomalyAlerts, type TokenSnapshot } from "./tokenHealth"
+import { computeCacheHitRate, formatUsageSummary } from "./tokenUsage"
 import {
   computeLineageHash,
   hashMessage,
@@ -134,30 +135,7 @@ function buildFreshPrompt(
 }
 
 function logUsage(requestId: string, usage: TokenUsage): void {
-  const fmt = (n: number) => n > 1000 ? `${Math.round(n / 1000)}k` : String(n)
-  const cacheRead = usage.cache_read_input_tokens ?? 0
-  const totalInput = usage.input_tokens ?? 0
-  const cacheRate = totalInput > 0 ? Math.round((cacheRead / totalInput) * 100) : 0
-  const cacheTag = totalInput > 0 ? ` cache=${cacheRate}%` : ""
-  const parts = [
-    `input=${fmt(usage.input_tokens ?? 0)}`,
-    `output=${fmt(usage.output_tokens ?? 0)}`,
-    ...(usage.cache_read_input_tokens ? [`cache_read=${fmt(usage.cache_read_input_tokens)}`] : []),
-    ...(usage.cache_creation_input_tokens ? [`cache_write=${fmt(usage.cache_creation_input_tokens)}`] : []),
-  ]
-  console.error(`[PROXY] ${requestId} usage: ${parts.join(" ")}${cacheTag}`)
-}
-
-function computeCacheHitRate(usage: TokenUsage | undefined): number | undefined {
-  if (!usage) return undefined
-  const read = usage.cache_read_input_tokens ?? 0
-  const creation = usage.cache_creation_input_tokens ?? 0
-  const uncached = usage.input_tokens ?? 0
-  // SDK reports input_tokens as only the non-cached portion.
-  // Total input = uncached + cache_read + cache_creation.
-  const total = uncached + read + creation
-  if (total === 0) return undefined
-  return read / total
+  console.error(`[PROXY] ${requestId} usage: ${formatUsageSummary(usage)}`)
 }
 
 function checkTokenHealth(

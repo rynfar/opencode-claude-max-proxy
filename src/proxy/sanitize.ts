@@ -2,30 +2,43 @@
  * Strips internal orchestration / transcript wrapper patterns that can leak
  * into text-only content paths and become model-visible.
  *
- * These are control/debug artifacts produced by OpenCode, oh-my-opencode, and
- * similar orchestration layers — not semantic content the model should see.
+ * Uses structural prefix matching where possible — tags whose name starts
+ * with task_, tool_, skill_, or system- are reserved by orchestration layers
+ * and never appear in standard HTML/XML. This catches current AND future
+ * orchestration tags without enumerating each one.
  *
  * Fixes: https://github.com/rynfar/meridian/issues/167
  */
 
 const TRANSCRIPT_WRAPPER_PATTERNS: RegExp[] = [
-  // System-level injection blocks
-  /<system-reminder[\s\S]*?<\/system-reminder>/gi,
-  /<task_metadata[\s\S]*?<\/task_metadata>/gi,
-  // Leaked thinking wrappers in text (not proper API thinking blocks)
+  // ── Structural: orchestration-prefix tags (paired + self-closing) ──
+  // Covers: task_metadata, task_result, tool_output, tool_exec, skill_content,
+  // skill_files, system-reminder, and any future tags with these prefixes.
+  /<(?:task|tool|skill|system)[-_]\w+\b[^>]*>[\s\S]*?<\/(?:task|tool|skill|system)[-_]\w+>/gi,
+  /<(?:task|tool|skill|system)[-_]\w+\b[^>]*\/>/gi,
+
+  // ── Structural: namespace-prefixed tags ──
+  // antml:* — Anthropic internal namespace (thinking, function_calls, invoke, etc.)
+  /<\w+\b[^>]*>[\s\S]*?<\/antml:\w+>/gi,
+  /<\w+\b[^>]*\/>/gi,
+  // dcp-* — OpenCode protocol metadata (message-id, system-reminder, etc.)
+  /<dcp-[\w-]+\b[^>]*>[\s\S]*?<\/dcp-[\w-]+>/gi,
+  /<dcp-[\w-]+\b[^>]*\/?>/gi,
+
+  // ── Explicit: tags without orchestration prefixes ──
+  // Leaked thinking wrappers (not proper API thinking blocks, no antml: namespace)
   /<thinking>[\s\S]*?<\/thinking>/gi,
-  // Tool execution / output wrappers
-  /<tool_output\b[^>]*>[\s\S]*?<\/tool_output>/gi,
-  /<tool_exec\b[^>]*\/>/gi,
-  /<tool_exec\b[^>]*>[\s\S]*?<\/tool_exec>/gi,
+  // System-injection blocks that leak into message content on session replay
+  /<env>[\s\S]*?<\/env>/gi,
+  /<directories>[\s\S]*?<\/directories>/gi,
+  /<available_skills>[\s\S]*?<\/available_skills>/gi,
+
+  // ── Explicit: non-tag orchestration artifacts ──
   // oh-my-opencode internal markers
   /<!--\s*OMO_INTERNAL_INITIATOR\s*-->/gi,
   /\[SYSTEM DIRECTIVE: OH-MY-OPENCODE[^\]]*\]/gi,
   // Background output task markers
   /⚙\s*background_output\s*\[task_id=[^\]]*\]\n?/g,
-  // Stray H: / A: transcript-prefix lines (line-start only, not mid-line)
-  /^H:\s+/gm,
-  /^A:\s+/gm,
   // File change summary blocks injected by meridian itself
   /\n?---\nFiles changed:[^\n]*(\n(?:  [-•*] [^\n]*))*\n?/g,
 ]

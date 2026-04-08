@@ -46,6 +46,7 @@ export { computeLineageHash, hashMessage, computeMessageHashes }
 export { clearSessionCache, getMaxSessionsLimit }
 export type { LineageResult }
 
+import { sanitizeMessages } from "./sanitize"
 
 
 
@@ -468,6 +469,7 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
       } else {
         messagesToConvert = allMessages
       }
+      messagesToConvert = sanitizeMessages(messagesToConvert)
 
       // Check if any messages contain multimodal content (images, documents, files)
       const MULTIMODAL_TYPES = new Set(["image", "document", "file"])

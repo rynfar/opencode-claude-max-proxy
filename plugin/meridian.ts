@@ -44,9 +44,10 @@ const MeridianPlugin: Plugin = async () => {
       output.headers["x-opencode-agent-mode"] = typeof agent === "object"
         ? (agent.mode ?? "primary")
         : "primary"
-      output.headers["x-opencode-agent-name"] = typeof agent === "object"
-        ? (agent.name ?? "unknown")
-        : String(agent)
+      const rawName = typeof agent === "object" ? (agent.name ?? "unknown") : String(agent)
+      output.headers["x-opencode-agent-name"] = rawName
+        .replace(/[^\x20-\x7E]/g, "")
+        .trim() || "unknown"
     },
   }
 }

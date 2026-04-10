@@ -11,8 +11,7 @@ import { existsSync, readFileSync } from "node:fs"
 import { resolve, dirname } from "node:path"
 import { fileURLToPath } from "node:url"
 import { Hono } from "hono"
-import { telemetryStore } from "./store"
-import { diagnosticLog } from "./logStore"
+import { telemetryStore, diagnosticLog } from "./index"
 import { dashboardHtml } from "./dashboard"
 
 // Read once at module load — src/telemetry/ is two levels below the package root

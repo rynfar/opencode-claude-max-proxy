@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeEach } from "bun:test"
-import { TelemetryStore } from "../telemetry/store"
-import type { RequestMetric } from "../telemetry/types"
+import { MemoryTelemetryStore } from "../telemetry/store"
+import type { RequestMetric, ITelemetryStore } from "../telemetry/types"
 
 function makeMetric(overrides: Partial<RequestMetric> = {}): RequestMetric {
   return {
@@ -23,11 +23,11 @@ function makeMetric(overrides: Partial<RequestMetric> = {}): RequestMetric {
   }
 }
 
-describe("TelemetryStore", () => {
-  let store: TelemetryStore
+describe("MemoryTelemetryStore", () => {
+  let store: MemoryTelemetryStore
 
   beforeEach(() => {
-    store = new TelemetryStore(10)
+    store = new MemoryTelemetryStore(10)
   })
 
   it("records and retrieves metrics", () => {
@@ -85,6 +85,16 @@ describe("TelemetryStore", () => {
     expect(filtered[0]!.requestId).toBe("new")
   })
 
+  it("returns the latest successful metric for an SDK session", () => {
+    store.record(makeMetric({ requestId: "older-ok", sdkSessionId: "sdk-1", totalDurationMs: 100 }))
+    store.record(makeMetric({ requestId: "latest-error", sdkSessionId: "sdk-1", error: "api_error", totalDurationMs: 200 }))
+    store.record(makeMetric({ requestId: "other-session", sdkSessionId: "sdk-2", totalDurationMs: 300 }))
+
+    const metric = store.getLastForSession("sdk-1")
+
+    expect(metric?.requestId).toBe("older-ok")
+  })
+
   it("clears all metrics", () => {
     store.record(makeMetric())
     store.record(makeMetric())
@@ -95,11 +105,11 @@ describe("TelemetryStore", () => {
   })
 })
 
-describe("TelemetryStore.summarize", () => {
-  let store: TelemetryStore
+describe("MemoryTelemetryStore.summarize", () => {
+  let store: MemoryTelemetryStore
 
   beforeEach(() => {
-    store = new TelemetryStore(100)
+    store = new MemoryTelemetryStore(100)
   })
 
   it("returns empty summary when no metrics exist", () => {
@@ -178,5 +188,17 @@ describe("TelemetryStore.summarize", () => {
     const summary = store.summarize()
     // TTFB should only include non-null values
     expect(summary.ttfb.p50).toBe(100)
+  })
+})
+
+describe("ITelemetryStore conformance", () => {
+  it("MemoryTelemetryStore satisfies ITelemetryStore", () => {
+    const store: ITelemetryStore = new MemoryTelemetryStore(10)
+    store.record(makeMetric())
+    expect(store.size).toBe(1)
+    expect(store.getRecent().length).toBe(1)
+    expect(store.summarize().totalRequests).toBe(1)
+    store.clear()
+    expect(store.size).toBe(0)
   })
 })

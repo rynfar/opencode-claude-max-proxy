@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.35.0](https://github.com/rynfar/meridian/compare/meridian-v1.34.1...meridian-v1.35.0) (2026-04-10)
+
+
+### Features
+
+* add version field to /health endpoint response ([#331](https://github.com/rynfar/meridian/issues/331)) ([382aee0](https://github.com/rynfar/meridian/commit/382aee0bd481bd0e56c781bf8d00be00368e980e))
+* **telemetry:** add Prometheus exposition format renderer ([9c57c3a](https://github.com/rynfar/meridian/commit/9c57c3a18a035bf4aebcc19f25879e6bd3ab174b))
+* **telemetry:** add Prometheus metrics renderer and /metrics endpoint ([49a88f9](https://github.com/rynfar/meridian/commit/49a88f935a232811e4834cc608965747e25db3d5))
+* **telemetry:** add SQLite-backed telemetry and diagnostic stores ([4671946](https://github.com/rynfar/meridian/commit/4671946fae9ff8f0f99103f74dec2ef4b5ba5d85))
+* **telemetry:** add SQLite-backed telemetry persistence ([9eed59f](https://github.com/rynfar/meridian/commit/9eed59f49949ed7d21bc124885e839381740ba8e))
+* **telemetry:** mount GET /metrics Prometheus endpoint ([9d79503](https://github.com/rynfar/meridian/commit/9d79503d724ba40ef48a132eaaad78463c49fc79))
+* **telemetry:** wire SQLite singleton with env-based fallback ([fb050d5](https://github.com/rynfar/meridian/commit/fb050d50ef133074e413ce65a2380fc3faf8c087))
+
+
+### Bug Fixes
+
+* **telemetry:** persist token health data in SQLite store ([88f02a5](https://github.com/rynfar/meridian/commit/88f02a54160cb29dfbb7e8af4fec5dd032e39f6f))
+
 ## [1.34.1](https://github.com/rynfar/meridian/compare/meridian-v1.34.0...meridian-v1.34.1) (2026-04-09)
 
 

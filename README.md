@@ -320,19 +320,19 @@ Pi uses the `@mariozechner/pi-ai` library which supports a configurable `baseUrl
 
 ```json
 {
-  "anthropic": {
-    "baseUrl": "http://127.0.0.1:3456"
+  "providers": {
+    "anthropic": {
+      "baseUrl": "http://127.0.0.1:3456",
+      "apiKey": "x",
+      "headers": {
+        "x-meridian-agent": "pi"
+      }
+    }
   }
 }
 ```
 
-Then start Meridian with the pi default adapter:
-
-```bash
-MERIDIAN_DEFAULT_AGENT=pi meridian
-```
-
-Pi mimics Claude Code's User-Agent, so automatic detection isn't possible. The `MERIDIAN_DEFAULT_AGENT` env var tells Meridian to use the pi adapter for all unrecognized requests. If you run other agents alongside pi, use the `x-meridian-agent: pi` header instead (requires pi-ai support for custom headers).
+Pi mimics Claude Code's User-Agent, so automatic detection isn't possible. The `x-meridian-agent: pi` header in the config above tells Meridian to use the Pi adapter. Alternatively, if Pi is your only agent, you can set `MERIDIAN_DEFAULT_AGENT=pi` as an env var instead.
 
 ### Any Anthropic-compatible tool
 

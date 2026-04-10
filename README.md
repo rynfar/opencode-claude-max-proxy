@@ -81,6 +81,8 @@ The Claude Code SDK provides programmatic access to Claude. But your favorite co
 - **Multimodal** — images, documents, and file attachments pass through to Claude
 - **Multi-profile** — switch between Claude accounts instantly, no restart needed
 - **Telemetry dashboard** — real-time performance metrics at `/telemetry`, including token usage and prompt cache efficiency ([`MONITORING.md`](MONITORING.md))
+- **Telemetry persistence** — opt-in SQLite storage for telemetry data that survives proxy restarts, with configurable retention
+- **Prometheus metrics** — `GET /metrics` endpoint for scraping request counters and duration histograms
 
 ## Multi-Profile Support
 
@@ -437,6 +439,9 @@ Implement the `AgentAdapter` interface in `src/proxy/adapters/`. See [`adapters/
 | `MERIDIAN_SONNET_MODEL` | `CLAUDE_PROXY_SONNET_MODEL` | `sonnet` | Sonnet context tier: `sonnet` (200k, default) or `sonnet[1m]` (1M, requires Extra Usage†) |
 | `MERIDIAN_DEFAULT_AGENT` | — | `opencode` | Default adapter for unrecognized agents: `opencode`, `forgecode`, `pi`, `crush`, `droid`, `passthrough`. Requires restart. |
 | `MERIDIAN_PROFILES` | — | unset | JSON array of profile configs (overrides disk discovery). See [Multi-Profile Support](#multi-profile-support). |
+| `MERIDIAN_TELEMETRY_PERSIST` | — | unset | Enable SQLite telemetry persistence. Data survives proxy restarts. |
+| `MERIDIAN_TELEMETRY_DB` | — | `~/.config/meridian/telemetry.db` | SQLite database path (when persistence is enabled) |
+| `MERIDIAN_TELEMETRY_RETENTION_DAYS` | — | `7` | Days to retain telemetry data before cleanup |
 | `MERIDIAN_DEFAULT_PROFILE` | — | *(first profile)* | Default profile ID when no header is sent |
 
 †Sonnet 1M requires Extra Usage on all plans including Max ([docs](https://code.claude.com/docs/en/model-config#extended-context)). Opus 1M is included with Max/Team/Enterprise at no extra cost.
@@ -456,6 +461,7 @@ Implement the `AgentAdapter` interface in `src/proxy/adapters/`. See [`adapters/
 | `GET /telemetry/requests` | Recent request metrics (JSON) |
 | `GET /telemetry/summary` | Aggregate statistics (JSON) |
 | `GET /telemetry/logs` | Diagnostic logs (JSON) |
+| `GET /metrics` | Prometheus exposition format metrics |
 | `GET /profiles` | Profile management page |
 | `GET /profiles/list` | List profiles with auth status (JSON) |
 | `POST /profiles/active` | Switch the active profile |

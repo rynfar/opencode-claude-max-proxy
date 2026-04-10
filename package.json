@@ -29,7 +29,8 @@
     "proxy:direct": "bun run ./bin/cli.ts"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.2.89"
+    "@anthropic-ai/claude-agent-sdk": "^0.2.89",
+    "libsql": "^0.5.29"
   },
   "devDependencies": {
     "@hono/node-server": "^1.19.11",

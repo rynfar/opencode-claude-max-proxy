@@ -23,18 +23,7 @@ Meridian bridges the Claude Code SDK to the standard Anthropic API. No OAuth int
 >
 > What Meridian adds is a **presentation and interoperability layer**. We translate Claude Code's output into the standard Anthropic API format so developers can connect the editors, terminals, and workflows they prefer. The SDK does the work; Meridian formats the result.
 >
-> If you're looking for a tool that circumvents usage limits or bypasses Anthropic's controls, this project is not for you. We play nice with the SDK because we believe that's how developers can continue to choose their own frontends while respecting Anthropic's platform.
-
-> [!WARNING]
-> ### Why Meridian does not support OpenClaw
->
-> There is technically a way to make Meridian work with OpenClaw, but we're not interested in pursuing it.
->
-> The reason Claude Max offers generous usage limits is because Anthropic can justify it through Claude Code — their harness, their optimizations, their control. OpenClaw blows through that with autonomous workflows that Anthropic has little ability to manage or optimize. Using Opus to check an email when a local model would handle it fine isn't efficient use — it's waste that degrades the plan for everyone.
->
-> I built Meridian because I believe developers should have the right to use the frontend of their choice. But that right comes with a responsibility: don't wreck the subscription for the rest of us. Sloppy autonomous agents that burn through Claude Max tokens are directly counter-productive to developers like me who depend on the plan being sustainable.
->
-> Meridian's philosophy is simple — play nice with the SDK, let Anthropic optimize how they see fit, and use the frontend you want within the constraints of Claude Code. OpenClaw is not just a frontend; it's an autonomous system that abuses the Max plan. We won't be supporting it.
+> **Our philosophy is simple: work within the SDK's constraints, not around them.** The generous limits on Claude Max exist because Anthropic can optimize and manage usage through Claude Code. Meridian respects that by building only on the tools Anthropic provides — no shortcuts, no workarounds that create friction. We believe this is how developers keep the freedom to choose their own frontends while keeping the platform sustainable for everyone.
 
 ## Quick Start
 
@@ -83,6 +72,35 @@ The Claude Code SDK provides programmatic access to Claude. But your favorite co
 - **Telemetry dashboard** — real-time performance metrics at `/telemetry`, including token usage and prompt cache efficiency ([`MONITORING.md`](MONITORING.md))
 - **Telemetry persistence** — opt-in SQLite storage for telemetry data that survives proxy restarts, with configurable retention
 - **Prometheus metrics** — `GET /metrics` endpoint for scraping request counters and duration histograms
+
+## Passthrough Mode and Tool Calling
+
+The core question is **who executes the tools** — the SDK or the client?
+
+- **Passthrough mode** (default for OpenCode) — Claude generates tool calls, but Meridian captures them and sends them back to the client for execution. The client runs the tool using its own implementation, with its own sandboxing, file tracking, and UI, then sends the result in the next request. This is how OpenCode, oh-my-opencagent (OMO), and most coding agents work — they have their own read/write/bash tools and need to stay in control of what runs on the user's machine.
+- **Internal mode** — Claude Code handles everything. The SDK executes tools directly on the host, runs its full agent loop, and returns the final result. This is for clients that are purely chat interfaces (Open WebUI, simple API consumers) with no tool execution of their own.
+
+Most users don't need to configure anything — the adapter sets the right mode automatically. To override:
+
+```bash
+MERIDIAN_PASSTHROUGH=1 meridian   # force passthrough
+MERIDIAN_PASSTHROUGH=0 meridian   # force internal
+```
+
+### How tool calling works in passthrough
+
+1. The client sends a request with tool definitions (read, write, edit, bash, glob, grep)
+2. Meridian registers these as MCP tools so the SDK can generate proper `tool_use` blocks
+3. The SDK produces a tool call → Meridian captures it and returns it to the client
+4. The client executes the tool locally and sends the result back
+
+For large tool sets (>15 tools), non-core tools are automatically deferred via the SDK's ToolSearch mechanism. Core tools (read, write, edit, bash, glob, grep) are always loaded eagerly. The deferral threshold is configurable with `MERIDIAN_DEFER_TOOL_THRESHOLD`.
+
+### Known limitations
+
+- **Single tool round-trip per request** — in passthrough mode, the SDK is configured with `maxTurns=2` (or 3 for deferred tools). Multi-step agentic loops where Claude needs several consecutive tool calls require the client to re-send after each round.
+- **Blocked tools** — 13 built-in SDK tools (Read, Write, Bash, etc.) are blocked to prevent conflicts with the client's own tools. 15 additional Claude Code-only tools (CronCreate, EnterWorktree, Agent, etc.) are blocked because they require capabilities that external clients don't support.
+- **Subagent extraction** — Meridian parses the client's Task tool description to extract subagent names and build SDK AgentDefinitions. If the client's agent framework uses a non-standard format, subagent routing may not work automatically.
 
 ## Multi-Profile Support
 
@@ -158,7 +176,7 @@ meridian setup
 This adds the Meridian plugin to your OpenCode global config (`~/.config/opencode/opencode.json`). The plugin enables:
 
 - **Session tracking** — reliable conversation continuity across requests
-- **Safe model defaults** — Opus uses 1M context (included with Max subscription); Sonnet uses 200k to avoid Extra Usage charges ([details](#extended-context-billing))
+- **Safe model defaults** — Opus uses 1M context (included with Max subscription); Sonnet uses 200k to avoid Extra Usage charges ([details](#configuration))
 - **Subagent model selection** — subagents automatically use `sonnet`/`opus` (200k), preserving rate-limit budget
 
 If the plugin is missing, Meridian warns at startup and reports `"plugin": "not-configured"` in the health endpoint.
@@ -175,6 +193,14 @@ Or set these in your shell profile so they're always active:
 export ANTHROPIC_API_KEY=x
 export ANTHROPIC_BASE_URL=http://127.0.0.1:3456
 ```
+
+#### oh-my-opencagent (OMO)
+
+[oh-my-opencagent](https://github.com/nicobailey/oh-my-opencagent) adds multi-agent orchestration on top of OpenCode. It works transparently through Meridian with no extra configuration — OMO uses the same OpenCode headers and tool format, so Meridian detects it automatically.
+
+Meridian parses OMO's Task tool descriptions to extract subagent names (explore, code-review, etc.) and builds SDK AgentDefinitions so Claude can route to the correct agent. Internal orchestration markers (`<!-- OMO_INTERNAL_INITIATOR -->`, `[SYSTEM DIRECTIVE: OH-MY-OPENCODE ...]`) are stripped automatically to prevent context leakage.
+
+OMO requires **passthrough mode** (the default for OpenCode) — subagent delegation flows through tool calls that must be forwarded back to the client.
 
 ### Crush
 
@@ -252,7 +278,7 @@ No plugin needed — Cline uses the standard Anthropic SDK.
 
 ```bash
 ANTHROPIC_API_KEY=x ANTHROPIC_BASE_URL=http://127.0.0.1:3456 \
-  aider --model anthropic/claude-sonnet-4-5-20250929
+  aider --model anthropic/claude-sonnet-4-6
 ```
 
 > **Note:** `--no-stream` is incompatible due to a litellm parsing issue — use the default streaming mode.
@@ -413,8 +439,10 @@ Agents are identified from request headers automatically:
 | Signal | Adapter |
 |---|---|
 | `x-meridian-agent` header | Explicit override (any adapter) |
-| `Charm-Crush/` User-Agent | Crush |
+| `x-opencode-session` or `x-session-affinity` header | OpenCode |
+| `opencode/` User-Agent | OpenCode |
 | `factory-cli/` User-Agent | Droid |
+| `Charm-Crush/` User-Agent | Crush |
 | `litellm/` UA or `x-litellm-*` headers | LiteLLM passthrough |
 | *(anything else)* | `MERIDIAN_DEFAULT_AGENT` env var, or OpenCode |
 
@@ -439,6 +467,7 @@ Implement the `AgentAdapter` interface in `src/proxy/adapters/`. See [`adapters/
 | `MERIDIAN_SONNET_MODEL` | `CLAUDE_PROXY_SONNET_MODEL` | `sonnet` | Sonnet context tier: `sonnet` (200k, default) or `sonnet[1m]` (1M, requires Extra Usage†) |
 | `MERIDIAN_DEFAULT_AGENT` | — | `opencode` | Default adapter for unrecognized agents: `opencode`, `forgecode`, `pi`, `crush`, `droid`, `passthrough`. Requires restart. |
 | `MERIDIAN_PROFILES` | — | unset | JSON array of profile configs (overrides disk discovery). See [Multi-Profile Support](#multi-profile-support). |
+| `MERIDIAN_DEFER_TOOL_THRESHOLD` | — | `15` | Number of tools before non-core tools are deferred via ToolSearch. Set to `0` to disable. |
 | `MERIDIAN_TELEMETRY_PERSIST` | — | unset | Enable SQLite telemetry persistence. Data survives proxy restarts. |
 | `MERIDIAN_TELEMETRY_DB` | — | `~/.config/meridian/telemetry.db` | SQLite database path (when persistence is enabled) |
 | `MERIDIAN_TELEMETRY_RETENTION_DAYS` | — | `7` | Days to retain telemetry data before cleanup |
@@ -471,6 +500,7 @@ Health response example:
 ```json
 {
   "status": "healthy",
+  "version": "1.34.1",
   "auth": { "loggedIn": true, "email": "you@example.com", "subscriptionType": "max" },
   "mode": "internal",
   "plugin": { "opencode": "configured" }

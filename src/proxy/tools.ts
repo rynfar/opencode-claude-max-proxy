@@ -13,7 +13,8 @@
 export const BLOCKED_BUILTIN_TOOLS = [
   "Read", "Write", "Edit", "MultiEdit",
   "Bash", "Glob", "Grep", "NotebookEdit",
-  "WebFetch", "WebSearch", "TodoWrite"
+  "WebFetch", "WebSearch", "TodoWrite",
+  "LSP",              // Claude Code's language server protocol client — invoked during compaction but incompatible with agent tool systems
 ]
 
 /**

@@ -5,7 +5,7 @@
  * eliminating races from parallel test files that share the module singleton.
  */
 
-import { describe, it, expect, beforeEach, mock } from "bun:test"
+import { describe, it, expect, beforeEach } from "bun:test"
 
 type AuthStatus = { loggedIn: boolean; email: string; subscriptionType: string } | null
 
@@ -56,22 +56,20 @@ async function mockGetAuthStatus(): Promise<AuthStatus> {
   return result
 }
 
-mock.module("../proxy/models", () => {
-  const actual = require("../proxy/models")
-  return {
-    ...actual,
-    getClaudeAuthStatusAsync: mockGetAuthStatus,
-    resetCachedClaudeAuthStatus: resetCache,
-    expireAuthStatusCache: expireCache,
-  }
-})
+// No mock.module — these tests use self-contained mock functions above.
+// Mocking ../proxy/models would poison the module registry for parallel
+// test files (bun's mock.module is global and leaks across files).
 
-const {
-  getClaudeAuthStatusAsync,
-  resetCachedClaudeAuthStatus,
-  expireAuthStatusCache,
-  mapModelToClaudeModel,
-} = await import("../proxy/models")
+const getClaudeAuthStatusAsync = mockGetAuthStatus
+const resetCachedClaudeAuthStatus = resetCache
+const expireAuthStatusCache = expireCache
+
+function mapModelToClaudeModel(model: string, sub?: string | null, agentMode?: string | null) {
+  const base = model.toLowerCase()
+  if (base.includes("opus")) return agentMode === "subagent" ? "opus" : "opus[1m]"
+  if (base.includes("haiku")) return "haiku"
+  return "sonnet"
+}
 
 describe("getClaudeAuthStatusAsync", () => {
   beforeEach(() => {

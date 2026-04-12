@@ -8,14 +8,25 @@
 
 import { describe, it, expect, mock } from "bun:test"
 
-mock.module("../proxy/models", () => {
-  const actual = require("../proxy/models")
-  return {
-    ...actual,
-    getClaudeAuthStatusAsync: async () => null,
-    resolveClaudeExecutableAsync: async () => "claude",
-  }
-})
+mock.module("../proxy/models", () => ({
+  getClaudeAuthStatusAsync: async () => null,
+  resolveClaudeExecutableAsync: async () => "claude",
+  mapModelToClaudeModel: (model: string) => {
+    if (model.toLowerCase().includes("opus")) return "opus"
+    if (model.toLowerCase().includes("haiku")) return "haiku"
+    return "sonnet"
+  },
+  getAuthCacheInfo: () => ({ lastCheckedAt: 0, lastSuccessAt: 0, isFailure: false }),
+  hasExtendedContext: () => false,
+  stripExtendedContext: (m: string) => m,
+  isClosedControllerError: (e: unknown) => e instanceof Error && e.message.includes("controller is closed"),
+  recordExtendedContextUnavailable: () => {},
+  isExtendedContextKnownUnavailable: () => false,
+  resetCachedClaudeAuthStatus: () => {},
+  resetCachedClaudePath: () => {},
+  expireAuthStatusCache: () => {},
+  resetExtendedContextUnavailable: () => {},
+}))
 
 const { createProxyServer } = await import("../proxy/server")
 

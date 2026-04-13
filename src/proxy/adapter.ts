@@ -136,6 +136,15 @@ export interface AgentAdapter {
   supportsThinking?(): boolean
 
   /**
+   * Whether the proxy should append synthetic file-change summaries to the
+   * agent-visible response.
+   *
+   * Return false for agents that already expose file edits natively or where
+   * the extra block is noisy. When undefined, the proxy defaults to true.
+   */
+  shouldTrackFileChanges?(): boolean
+
+  /**
    * Map a client-side tool_use block to file changes (passthrough mode).
    *
    * In passthrough mode the SDK doesn't execute tools, so PostToolUse

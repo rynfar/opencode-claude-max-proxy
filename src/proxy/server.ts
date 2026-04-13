@@ -643,6 +643,7 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
       // Catches write, edit, AND bash redirects (>, >>, tee, sed -i).
       const mcpPrefix = `mcp__${adapter.getMcpServerName()}__`
       const trackFileChanges = !(process.env.MERIDIAN_NO_FILE_CHANGES ?? process.env.CLAUDE_PROXY_NO_FILE_CHANGES)
+        && adapter.shouldTrackFileChanges?.() !== false
       const fileChangeHook = trackFileChanges ? createFileChangeHook(fileChanges, mcpPrefix) : undefined
 
       // Track tools discovered via ToolSearch (deferred tools that get called)

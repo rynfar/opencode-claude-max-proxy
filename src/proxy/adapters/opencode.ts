@@ -63,6 +63,14 @@ export const openCodeAdapter: AgentAdapter = {
   },
 
   /**
+   * NOTE: OpenCode-specific. OpenCode already exposes file edits in its own UI,
+   * so Meridian should not append a synthetic "Files changed:" block.
+   */
+  shouldTrackFileChanges(): boolean {
+    return false
+  },
+
+  /**
    * NOTE: OpenCode-specific. Parses the Task tool description to extract
    * subagent names and build SDK AgentDefinition objects for native subagent routing.
    */

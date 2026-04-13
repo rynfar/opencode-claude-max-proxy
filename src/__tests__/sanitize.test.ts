@@ -12,6 +12,8 @@ import { describe, it, expect, afterEach } from "bun:test";
 import {
   scrubVendorReferences,
   maybeScrubSystemContext,
+  maybeScrubRequestBody,
+  scrubMessagesSelective,
   getVendorScrubFromEnv,
 } from "../proxy/sanitize";
 
@@ -181,5 +183,192 @@ describe("maybeScrubSystemContext", () => {
     expect(maybeScrubSystemContext("OpenClaw")).toBe("AgentSystem");
     delete process.env.MERIDIAN_SCRUB_VENDOR;
     expect(maybeScrubSystemContext("OpenClaw")).toBe("OpenClaw");
+  });
+});
+
+describe("scrubMessagesSelective", () => {
+  it("does NOT scrub tool_use input containing openclaw file paths", () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: "toolu_1",
+            name: "Write",
+            input: {
+              file_path: "/data/.openclaw/extensions/crm/index.ts",
+              content: "export const plugin = 'openclaw-crm';",
+            },
+          },
+        ],
+      },
+    ];
+    const result = scrubMessagesSelective(messages);
+    const block = (result[0] as any).content[0];
+    expect(block.input.file_path).toBe(
+      "/data/.openclaw/extensions/crm/index.ts",
+    );
+    expect(block.input.content).toBe("export const plugin = 'openclaw-crm';");
+  });
+
+  it("does NOT scrub tool_result content containing openclaw paths", () => {
+    const messages = [
+      {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "toolu_1",
+            content: "File written to /data/.openclaw/extensions/crm/index.ts",
+          },
+        ],
+      },
+    ];
+    const result = scrubMessagesSelective(messages);
+    const block = (result[0] as any).content[0];
+    expect(block.content).toBe(
+      "File written to /data/.openclaw/extensions/crm/index.ts",
+    );
+  });
+
+  it("DOES scrub text blocks in the same message", () => {
+    const messages = [
+      {
+        role: "user",
+        content: [{ type: "text", text: "You are running inside OpenClaw" }],
+      },
+    ];
+    const result = scrubMessagesSelective(messages);
+    const block = (result[0] as any).content[0];
+    expect(block.text).toBe("You are running inside AgentSystem");
+  });
+
+  it("DOES scrub simple string content in messages", () => {
+    const messages = [
+      { role: "user", content: "Tell me about OpenClaw features" },
+    ];
+    const result = scrubMessagesSelective(messages);
+    expect((result[0] as any).content).toBe(
+      "Tell me about AgentSystem features",
+    );
+  });
+
+  it("scrubs text but preserves tool_use in a mixed message", () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "I'll write the OpenClaw plugin now." },
+          {
+            type: "tool_use",
+            id: "toolu_2",
+            name: "Write",
+            input: {
+              file_path: "/data/.openclaw/extensions/nikin-klaviyo/index.ts",
+            },
+          },
+        ],
+      },
+    ];
+    const result = scrubMessagesSelective(messages);
+    const content = (result[0] as any).content;
+    expect(content[0].text).toBe("I'll write the AgentSystem plugin now.");
+    expect(content[1].input.file_path).toBe(
+      "/data/.openclaw/extensions/nikin-klaviyo/index.ts",
+    );
+  });
+
+  it("scrubs thinking blocks", () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "The OpenClaw config is at /data/.openclaw/openclaw.json",
+          },
+        ],
+      },
+    ];
+    const result = scrubMessagesSelective(messages);
+    const block = (result[0] as any).content[0];
+    expect(block.thinking).toContain("AgentSystem");
+    expect(block.thinking).not.toContain("OpenClaw");
+  });
+
+  it("does NOT scrub redacted_thinking blocks (opaque encrypted data)", () => {
+    const opaqueData = "base64encodedOpenClawencryptedblob==";
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "redacted_thinking",
+            data: opaqueData,
+          },
+        ],
+      },
+    ];
+    const result = scrubMessagesSelective(messages);
+    const block = (result[0] as any).content[0];
+    expect(block.type).toBe("redacted_thinking");
+    expect(block.data).toBe(opaqueData);
+  });
+});
+
+describe("maybeScrubRequestBody — selective scrub", () => {
+  const original = process.env.MERIDIAN_SCRUB_VENDOR;
+
+  afterEach(() => {
+    if (original === undefined) delete process.env.MERIDIAN_SCRUB_VENDOR;
+    else process.env.MERIDIAN_SCRUB_VENDOR = original;
+  });
+
+  it("scrubs system prompt but preserves tool_use paths in messages", () => {
+    process.env.MERIDIAN_SCRUB_VENDOR = "openclaw";
+    const body = {
+      system: "You are a personal assistant running inside OpenClaw",
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "tool_use",
+              id: "toolu_1",
+              name: "Write",
+              input: { file_path: "/data/.openclaw/extensions/crm/index.ts" },
+            },
+          ],
+        },
+      ],
+      tools: [
+        { name: "Write", description: "Write files for OpenClaw plugins" },
+      ],
+      model: "claude-sonnet-4-6",
+      max_tokens: 4096,
+    };
+    const result = maybeScrubRequestBody(body);
+    // System prompt scrubbed
+    expect(result.system).toContain("AgentSystem");
+    expect(result.system).not.toContain("OpenClaw");
+    // Tool description scrubbed
+    expect((result.tools as any)[0].description).toContain("AgentSystem");
+    // tool_use input preserved
+    const toolBlock = (result.messages as any)[0].content[0];
+    expect(toolBlock.input.file_path).toBe(
+      "/data/.openclaw/extensions/crm/index.ts",
+    );
+  });
+
+  it("returns body unchanged when env var is unset", () => {
+    delete process.env.MERIDIAN_SCRUB_VENDOR;
+    const body = {
+      system: "OpenClaw",
+      messages: [],
+      model: "claude-sonnet-4-6",
+    };
+    const result = maybeScrubRequestBody(body);
+    expect(result.system).toBe("OpenClaw");
   });
 });

@@ -151,12 +151,92 @@ export function scrubVendorReferencesDeep<T>(
 }
 
 /**
- * Scrub vendor references from the entire Anthropic Messages API request
- * body when enabled by env. Covers `system`, `messages[*].content`,
- * `tools[*].description`, and any other string leaf in the request.
+ * Selectively scrub vendor references from messages, skipping tool_use
+ * and tool_result content blocks.
  *
- * Returns a new body object with all string leaves rewritten. Returns
- * the original body unchanged when scrubbing is disabled.
+ * Anthropic fingerprints system prompts and tool descriptions, NOT file
+ * paths inside tool call arguments or tool results. The blind deep-scrub
+ * was rewriting paths like `/data/.openclaw/extensions/crm/index.ts` to
+ * `/data/.agentsystem/extensions/crm/index.ts` — a path that doesn't
+ * exist — causing deployment failures in agent-driven plugin installs.
+ *
+ * Content block handling:
+ *   - tool_use:   pass through unchanged (input contains file paths)
+ *   - tool_result: pass through unchanged (content contains file data)
+ *   - text:       scrub the text field (may contain fingerprint phrases)
+ *   - thinking:   scrub (reasoning may echo fingerprint phrases)
+ *   - other:      scrub (defense in depth for unknown block types)
+ */
+export function scrubMessagesSelective(
+  messages: unknown[],
+  vendor: VendorScrubTarget = "openclaw",
+): unknown[] {
+  return messages.map((msg) => {
+    if (!msg || typeof msg !== "object") return msg;
+    const m = msg as Record<string, unknown>;
+    const content = m["content"];
+
+    // String content (simple user/assistant messages) — scrub directly
+    if (typeof content === "string") {
+      return { ...m, content: scrubVendorReferences(content, vendor) };
+    }
+
+    // Array content (structured content blocks) — selective per block type
+    if (Array.isArray(content)) {
+      const scrubbed = content.map((block) => {
+        if (!block || typeof block !== "object") {
+          return typeof block === "string"
+            ? scrubVendorReferences(block, vendor)
+            : block;
+        }
+        const b = block as Record<string, unknown>;
+        const blockType = b["type"];
+
+        // tool_use, tool_result, redacted_thinking: pass through unchanged
+        // (opaque content — file paths, encrypted blobs, tool output)
+        if (
+          blockType === "tool_use" ||
+          blockType === "tool_result" ||
+          blockType === "redacted_thinking"
+        ) {
+          return block;
+        }
+
+        // text blocks: scrub only the text field, preserve structure
+        if (blockType === "text" && typeof b["text"] === "string") {
+          return {
+            ...b,
+            text: scrubVendorReferences(b["text"] as string, vendor),
+          };
+        }
+
+        // thinking blocks: scrub the thinking field
+        if (blockType === "thinking" && typeof b["thinking"] === "string") {
+          return {
+            ...b,
+            thinking: scrubVendorReferences(b["thinking"] as string, vendor),
+          };
+        }
+
+        // Unknown block types: deep scrub for defense in depth
+        return scrubVendorReferencesDeep(block, vendor);
+      });
+      return { ...m, content: scrubbed };
+    }
+
+    // No content or unrecognized shape — return unchanged
+    return msg;
+  });
+}
+
+/**
+ * Scrub vendor references from the Anthropic Messages API request body
+ * using structure-aware scrubbing. Scrubs system prompts and tool
+ * descriptions fully, but skips tool_use/tool_result content blocks in
+ * messages to preserve file paths.
+ *
+ * Returns a new body object. Returns the original body unchanged when
+ * scrubbing is disabled.
  *
  * NOTE: This is invoked BEFORE systemContext extraction in server.ts so
  * the downstream `maybeScrubSystemContext` call becomes a no-op (the
@@ -175,7 +255,20 @@ export function maybeScrubRequestBody<T extends Record<string, unknown>>(
     (typeof sys === "string" ? sys.length : JSON.stringify(sys ?? "").length) +
     JSON.stringify(msgs ?? "").length +
     JSON.stringify(tools ?? "").length;
-  const scrubbed = scrubVendorReferencesDeep(body, vendor);
+
+  // Structure-aware scrub: system + tools get deep scrub,
+  // messages get selective scrub that skips tool_use/tool_result blocks.
+  const scrubbed = { ...body } as Record<string, unknown>;
+  if (sys !== undefined) {
+    scrubbed["system"] = scrubVendorReferencesDeep(sys, vendor);
+  }
+  if (tools !== undefined) {
+    scrubbed["tools"] = scrubVendorReferencesDeep(tools, vendor);
+  }
+  if (Array.isArray(msgs)) {
+    scrubbed["messages"] = scrubMessagesSelective(msgs, vendor);
+  }
+
   const after = (() => {
     const s = scrubbed["system"];
     const m = scrubbed["messages"];
@@ -192,7 +285,7 @@ export function maybeScrubRequestBody<T extends Record<string, unknown>>(
       `[sanitize] scrubbed request body vendor="${vendor}" before=${before} delta=${delta}`,
     );
   }
-  return scrubbed;
+  return scrubbed as T;
 }
 
 // =============================================================================

@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.37.1](https://github.com/rynfar/meridian/compare/meridian-v1.37.0...meridian-v1.37.1) (2026-04-13)
+
+
+### Bug Fixes
+
+* cache tool definitions per session to prevent prompt cache invalidation ([a74e53c](https://github.com/rynfar/meridian/commit/a74e53caf26cf2861977f8f5bf060b6022d59e43)), closes [#353](https://github.com/rynfar/meridian/issues/353)
+
 ## [1.37.0](https://github.com/rynfar/meridian/compare/meridian-v1.36.0...meridian-v1.37.0) (2026-04-12)
 
 

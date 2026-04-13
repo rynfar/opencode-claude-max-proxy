@@ -21,8 +21,8 @@ jobs:
     if: ${{ !inputs.publish_only }}
     runs-on: ubuntu-latest
     outputs:
-      release_created: ${{ steps.release.outputs.release_created }}
-      tag_name: ${{ steps.release.outputs.tag_name }}
+      release_created: ${{ steps.release.outputs['meridian--release_created'] }}
+      tag_name: ${{ steps.release.outputs['meridian--tag_name'] }}
     steps:
       - uses: googleapis/release-please-action@v4
         id: release

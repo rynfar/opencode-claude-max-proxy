@@ -36,3 +36,7 @@ context.md
 .omc/
 apps/desktop/src-tauri/target/
 apps/desktop/src-tauri/target/
+
+# Local agent tooling (per-developer; never commit)
+.claude/
+.pylon/

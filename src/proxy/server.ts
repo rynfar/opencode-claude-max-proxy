@@ -655,6 +655,9 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
               hooks: [async (input: any) => {
                 // Let the SDK handle ToolSearch internally for deferred tool loading.
                 // ToolSearch is filtered from the response stream below.
+                // Return {} — NOT undefined. SDK validates hook returns with Zod and
+                // rejects undefined ("expected object, received undefined"), which also
+                // cascades into "Reached maximum number of turns (2)". {} is the no-op.
                 if (input.tool_name === "ToolSearch") return {}
                 // Track deferred tools that were discovered via ToolSearch
                 const toolName = stripMcpPrefix(input.tool_name)

@@ -655,7 +655,7 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
               hooks: [async (input: any) => {
                 // Let the SDK handle ToolSearch internally for deferred tool loading.
                 // ToolSearch is filtered from the response stream below.
-                if (input.tool_name === "ToolSearch") return undefined
+                if (input.tool_name === "ToolSearch") return {}
                 // Track deferred tools that were discovered via ToolSearch
                 const toolName = stripMcpPrefix(input.tool_name)
                 if (hasDeferredTools && coreSet && !coreSet.has(toolName.toLowerCase())) {

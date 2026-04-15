@@ -61,6 +61,8 @@ export interface QueryContext {
   codeSystemPrompt?: boolean
   /** Include the client agent's system prompt */
   clientSystemPrompt?: boolean
+  /** Redirect the client's system prompt into the user message instead of the system field */
+  systemPromptAsUserMessage?: boolean
   /** Enable auto-memory (read + write across sessions) */
   memory?: boolean
   /** Enable background memory consolidation (dreaming) */
@@ -93,11 +95,14 @@ function resolveSystemPrompt(
   settingSources: SettingSource[] | undefined,
   codeSystemPrompt?: boolean,
   clientSystemPrompt?: boolean,
+  systemPromptAsUserMessage?: boolean,
 ): { systemPrompt?: string | { type: "preset"; preset: "claude_code"; append?: string } } {
   const hasSettings = settingSources != null && settingSources.length > 0
   const usePreset = codeSystemPrompt ?? (hasSettings || (!passthrough && !!systemContext))
   const includeClient = clientSystemPrompt ?? true
-  const clientContext = includeClient ? systemContext : undefined
+  // When redirecting the client's system prompt to the user message,
+  // strip it from the system field — it will be prepended to the prompt instead.
+  const clientContext = (includeClient && !systemPromptAsUserMessage) ? systemContext : undefined
 
   if (usePreset) {
     return clientContext
@@ -114,6 +119,7 @@ export function buildQueryOptions(ctx: QueryContext): BuildQueryResult {
     passthrough, stream, sdkAgents, passthroughMcp, cleanEnv, hasDeferredTools,
     resumeSessionId, isUndo, undoRollbackUuid, sdkHooks, adapter, onStderr,
     effort, thinking, taskBudget, betas, settingSources, codeSystemPrompt, clientSystemPrompt,
+    systemPromptAsUserMessage,
     memory, dreaming, sharedMemory, maxBudgetUsd, fallbackModel, sdkDebug, additionalDirectories,
   } = ctx
 
@@ -145,7 +151,7 @@ export function buildQueryOptions(ctx: QueryContext): BuildQueryResult {
       ...(stream ? { includePartialMessages: true } : {}),
       permissionMode: "bypassPermissions" as const,
       allowDangerouslySkipPermissions: true,
-      ...resolveSystemPrompt(systemContext, passthrough, settingSources, codeSystemPrompt, clientSystemPrompt),
+      ...resolveSystemPrompt(systemContext, passthrough, settingSources, codeSystemPrompt, clientSystemPrompt, systemPromptAsUserMessage),
       ...(passthrough
         ? {
             disallowedTools: blockedTools,

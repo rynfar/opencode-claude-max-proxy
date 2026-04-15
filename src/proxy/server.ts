@@ -593,6 +593,25 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
           .join("\n\n") || ""
       }
 
+      // When systemPromptAsUserMessage is enabled, prepend the client's system
+      // prompt into the user-visible prompt instead of the SDK system field.
+      // This avoids system prompt change detection that can cause rejections.
+      if (sdkFeatures.systemPromptAsUserMessage && systemContext) {
+        const systemPreamble = `<system-instructions>\n${systemContext}\n</system-instructions>\n\n`
+        if (structuredMessages) {
+          structuredMessages.unshift({
+            type: "user" as const,
+            message: { role: "user" as const, content: systemPreamble },
+            parent_tool_use_id: null,
+          })
+        } else if (textPrompt !== undefined) {
+          textPrompt = `Human: ${systemPreamble}\n\n${textPrompt}`
+        }
+        claudeLog("system_prompt.redirected_to_user_message", {
+          length: systemContext.length,
+        })
+      }
+
       // Create a fresh prompt value — can be called multiple times for retry
       function makePrompt(): string | AsyncIterable<any> {
         if (structuredMessages) {
@@ -767,6 +786,7 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
                     resumeSessionId, isUndo, undoRollbackUuid, sdkHooks, adapter, onStderr,
                     effort, thinking, taskBudget, betas, settingSources,
                     codeSystemPrompt: sdkFeatures.codeSystemPrompt ? true : undefined, clientSystemPrompt: sdkFeatures.clientSystemPrompt === false ? false : undefined,
+                    systemPromptAsUserMessage: sdkFeatures.systemPromptAsUserMessage || undefined,
                     memory: sdkFeatures.memory, dreaming: sdkFeatures.dreaming, sharedMemory: sdkFeatures.sharedMemory,
                     maxBudgetUsd: sdkFeatures.maxBudgetUsd, fallbackModel: sdkFeatures.fallbackModel,
                     sdkDebug: sdkFeatures.sdkDebug,
@@ -807,6 +827,7 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
                       resumeSessionId: undefined, isUndo: false, undoRollbackUuid: undefined, sdkHooks, adapter, onStderr,
                       effort, thinking, taskBudget, betas, settingSources,
                       codeSystemPrompt: sdkFeatures.codeSystemPrompt ? true : undefined, clientSystemPrompt: sdkFeatures.clientSystemPrompt === false ? false : undefined,
+                      systemPromptAsUserMessage: sdkFeatures.systemPromptAsUserMessage || undefined,
                     memory: sdkFeatures.memory, dreaming: sdkFeatures.dreaming, sharedMemory: sdkFeatures.sharedMemory,
                       maxBudgetUsd: sdkFeatures.maxBudgetUsd, fallbackModel: sdkFeatures.fallbackModel,
                       sdkDebug: sdkFeatures.sdkDebug,
@@ -1186,6 +1207,7 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
                       resumeSessionId, isUndo, undoRollbackUuid, sdkHooks, adapter, onStderr,
                       effort, thinking, taskBudget, betas, settingSources,
                       codeSystemPrompt: sdkFeatures.codeSystemPrompt ? true : undefined, clientSystemPrompt: sdkFeatures.clientSystemPrompt === false ? false : undefined,
+                      systemPromptAsUserMessage: sdkFeatures.systemPromptAsUserMessage || undefined,
                     memory: sdkFeatures.memory, dreaming: sdkFeatures.dreaming, sharedMemory: sdkFeatures.sharedMemory,
                       maxBudgetUsd: sdkFeatures.maxBudgetUsd, fallbackModel: sdkFeatures.fallbackModel,
                       sdkDebug: sdkFeatures.sdkDebug,
@@ -1223,6 +1245,7 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
                         resumeSessionId: undefined, isUndo: false, undoRollbackUuid: undefined, sdkHooks, adapter, onStderr,
                         effort, thinking, taskBudget, betas, settingSources,
                         codeSystemPrompt: sdkFeatures.codeSystemPrompt ? true : undefined, clientSystemPrompt: sdkFeatures.clientSystemPrompt === false ? false : undefined,
+                        systemPromptAsUserMessage: sdkFeatures.systemPromptAsUserMessage || undefined,
                     memory: sdkFeatures.memory, dreaming: sdkFeatures.dreaming, sharedMemory: sdkFeatures.sharedMemory,
                         maxBudgetUsd: sdkFeatures.maxBudgetUsd, fallbackModel: sdkFeatures.fallbackModel,
                         sdkDebug: sdkFeatures.sdkDebug,

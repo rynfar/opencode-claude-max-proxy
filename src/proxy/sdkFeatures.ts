@@ -14,6 +14,9 @@ export interface AdapterFeatures {
   codeSystemPrompt: boolean
   /** Include the client agent's system prompt (e.g. OpenCode/Crush instructions) */
   clientSystemPrompt: boolean
+  /** Redirect the client's system prompt into the first user message instead of the system field.
+   *  Avoids system prompt change detection that can cause Claude to reject the request. */
+  systemPromptAsUserMessage: boolean
   /** Load CLAUDE.md instruction files (off, project, full) */
   claudeMd: "off" | "project" | "full"
   /** Enable auto-memory (read + write across sessions) */
@@ -41,6 +44,7 @@ export type FeatureConfig = Record<string, Partial<AdapterFeatures>>
 const DEFAULT_FEATURES: AdapterFeatures = {
   codeSystemPrompt: false,
   clientSystemPrompt: true,
+  systemPromptAsUserMessage: true,
   claudeMd: "off" as const,
   memory: false,
   dreaming: false,

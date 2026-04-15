@@ -23,9 +23,15 @@ describe("validateFeatureUpdate", () => {
     expect(validateFeatureUpdate({ clientSystemPrompt: false })).toEqual({ clientSystemPrompt: false })
   })
 
+  it("accepts systemPromptAsUserMessage boolean", () => {
+    expect(validateFeatureUpdate({ systemPromptAsUserMessage: true })).toEqual({ systemPromptAsUserMessage: true })
+    expect(validateFeatureUpdate({ systemPromptAsUserMessage: false })).toEqual({ systemPromptAsUserMessage: false })
+  })
+
   it("rejects non-boolean for system prompt toggles", () => {
     expect(() => validateFeatureUpdate({ codeSystemPrompt: "yes" })).toThrow("codeSystemPrompt must be a boolean")
     expect(() => validateFeatureUpdate({ clientSystemPrompt: 1 })).toThrow("clientSystemPrompt must be a boolean")
+    expect(() => validateFeatureUpdate({ systemPromptAsUserMessage: "yes" })).toThrow("systemPromptAsUserMessage must be a boolean")
   })
 
   it("accepts valid thinking enum values", () => {

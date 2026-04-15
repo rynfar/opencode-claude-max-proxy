@@ -336,4 +336,45 @@ describe("buildQueryOptions", () => {
     }))
     expect((result.options as any).systemPrompt).toBeUndefined()
   })
+
+  // ── systemPromptAsUserMessage ─────────────────────────────────────
+
+  it("omits systemPrompt when systemPromptAsUserMessage is true (passthrough)", () => {
+    const result = buildQueryOptions(makeContext({
+      passthrough: true,
+      systemContext: "Agent instructions",
+      systemPromptAsUserMessage: true,
+    }))
+    expect((result.options as any).systemPrompt).toBeUndefined()
+  })
+
+  it("omits client append from preset when systemPromptAsUserMessage is true with codeSystemPrompt", () => {
+    const result = buildQueryOptions(makeContext({
+      systemContext: "Agent instructions",
+      codeSystemPrompt: true,
+      systemPromptAsUserMessage: true,
+    }))
+    const sp = (result.options as any).systemPrompt
+    expect(sp.type).toBe("preset")
+    expect(sp.preset).toBe("claude_code")
+    expect(sp.append).toBeUndefined()
+  })
+
+  it("still omits systemPrompt when systemPromptAsUserMessage + clientSystemPrompt false", () => {
+    const result = buildQueryOptions(makeContext({
+      passthrough: true,
+      systemContext: "Agent instructions",
+      systemPromptAsUserMessage: true,
+      clientSystemPrompt: false,
+    }))
+    expect((result.options as any).systemPrompt).toBeUndefined()
+  })
+
+  it("does not affect systemPrompt when systemPromptAsUserMessage is undefined", () => {
+    const result = buildQueryOptions(makeContext({
+      passthrough: true,
+      systemContext: "Agent instructions",
+    }))
+    expect((result.options as any).systemPrompt).toBe("Agent instructions")
+  })
 })

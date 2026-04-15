@@ -102,5 +102,9 @@
       overlays.default = final: prev: {
         meridian = self.packages.${final.system}.meridian;
       };
+
+      homeManagerModules.default = import ./nix/hm-module.nix {
+        meridianPackages = self.packages;
+      };
     };
 }

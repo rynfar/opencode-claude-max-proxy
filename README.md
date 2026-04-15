@@ -99,6 +99,45 @@ Then in `~/.config/opencode/opencode.json`:
 
 > **Important:** Do not use `meridian setup` on NixOS. It writes an absolute Nix store path (e.g. `/nix/store/...-meridian-1.x.x/lib/...`) into your OpenCode config, which will break on the next `nixos-rebuild switch` or `home-manager switch` when the store path changes. Use one of the approaches above instead.
 
+**Home Manager service** -- run Meridian as a user systemd service:
+
+```nix
+# flake.nix
+{
+  inputs.meridian.url = "github:rynfar/meridian";
+}
+
+# home-manager config
+{
+  imports = [ meridian.homeManagerModules.default ];
+
+  services.meridian = {
+    enable = true;
+    settings = {
+      port = 3456;
+      host = "127.0.0.1";
+      # passthrough = true;
+      # defaultAgent = "opencode";
+      # sonnetModel = "sonnet";
+    };
+    # Extra env vars not covered by settings
+    # environment = {
+    #   MERIDIAN_MAX_CONCURRENT = "20";
+    # };
+  };
+}
+```
+
+The service starts automatically on login. Manage it with `systemctl --user {start,stop,restart,status} meridian`.
+
+The plugin path is also available as `config.services.meridian.opencode.pluginPath` for use in your OpenCode config:
+
+```nix
+xdg.configFile."opencode/opencode.json".text = builtins.toJSON {
+  plugin = [ config.services.meridian.opencode.pluginPath ];
+};
+```
+
 ## Why Meridian?
 
 The Claude Code SDK provides programmatic access to Claude. But your favorite coding tools expect an Anthropic API endpoint. Meridian bridges that gap — it runs locally, accepts standard API requests, and routes them through the SDK. Claude Code does the heavy lifting; Meridian translates the output.

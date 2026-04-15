@@ -25,6 +25,7 @@
     "postbuild": "node --check dist/cli.js && node --check dist/server.js && test -f dist/proxy/server.d.ts",
     "prepublishOnly": "bun run build",
     "test": "bun test --path-ignore-patterns '**/*session-store*' --path-ignore-patterns '**/*proxy-async-ops*' --path-ignore-patterns '**/*proxy-extra-usage-fallback*' --path-ignore-patterns '**/*models-auth-status*' --path-ignore-patterns '**/*proxy-context-usage-store*' --path-ignore-patterns '**/*proxy-passthrough-thinking*' --path-ignore-patterns '**/*profile-switch-integration*' --path-ignore-patterns '**/*session-recovery*' --path-ignore-patterns '**/*models.test*' --path-ignore-patterns '**/*proxy-health-degraded*' --path-ignore-patterns '**/*proxy-subagent-model-selection*' && bun test src/__tests__/profile-switch-integration.test.ts && bun test src/__tests__/proxy-extra-usage-fallback.test.ts && bun test src/__tests__/proxy-async-ops.test.ts && bun test src/__tests__/proxy-session-store.test.ts && bun test src/__tests__/session-store-pruning.test.ts && bun test src/__tests__/proxy-session-store-locking.test.ts && bun test src/__tests__/proxy-context-usage-store.test.ts && bun test src/__tests__/models-auth-status.test.ts && bun test src/__tests__/proxy-passthrough-thinking.test.ts && bun test src/__tests__/proxy-session-recovery.test.ts && bun test src/__tests__/models.test.ts && bun test src/__tests__/proxy-health-degraded.test.ts && bun test src/__tests__/proxy-subagent-model-selection.test.ts",
+    "postinstall": "bun2nix -o bun.nix",
     "typecheck": "tsc --noEmit",
     "proxy:direct": "bun run ./bin/cli.ts"
   },
@@ -36,6 +37,7 @@
     "@hono/node-server": "^1.19.11",
     "@types/bun": "^1.3.11",
     "@types/node": "^22.0.0",
+    "bun2nix": "^2.0.8",
     "glob": "^13.0.0",
     "hono": "^4.11.4",
     "typescript": "^5.8.2"

@@ -30,6 +30,11 @@ jobs:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
           skip-labeling: true
+          # Must be set on the action input (not just per-package config) so the
+          # previous-release LOOKUP side matches our `meridian-v<version>` tags.
+          # Without this the action looks for `v<version>`, can't find the last
+          # release, and recomputes every cycle from full history (#371).
+          include-component-in-tag: true
 
   publish:
     needs: release-please

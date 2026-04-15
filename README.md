@@ -49,6 +49,56 @@ ANTHROPIC_API_KEY=x ANTHROPIC_BASE_URL=http://127.0.0.1:3456 opencode
 
 The API key value is a placeholder — Meridian authenticates through the Claude Code SDK, not API keys. Most Anthropic-compatible tools require this field to be set, but any value works.
 
+### NixOS / Nix Flake
+
+Meridian provides a Nix flake for declarative installation.
+
+**Add to your flake inputs:**
+
+```nix
+{
+  inputs.meridian.url = "github:rynfar/meridian";
+}
+```
+
+**Install the package** (via overlay or directly):
+
+```nix
+# Option A: overlay
+nixpkgs.overlays = [ meridian.overlays.default ];
+environment.systemPackages = [ pkgs.meridian ];
+
+# Option B: direct reference
+environment.systemPackages = [ meridian.packages.${system}.meridian ];
+```
+
+**OpenCode plugin** -- the plugin file is included at `${pkgs.meridian}/lib/meridian/plugin/meridian.ts`. Since this path lives in the Nix store, you need to make it available to OpenCode:
+
+If you generate your OpenCode config from Nix (e.g. via Home Manager), interpolate the path directly:
+
+```nix
+# home-manager example
+xdg.configFile."opencode/opencode.json".text = builtins.toJSON {
+  plugin = [ "${pkgs.meridian}/lib/meridian/plugin/meridian.ts" ];
+};
+```
+
+If you don't manage your OpenCode config through Nix, symlink the plugin to a stable path and reference that instead:
+
+```nix
+# configuration.nix or home-manager
+environment.etc."meridian/plugin/meridian.ts".source =
+  "${pkgs.meridian}/lib/meridian/plugin/meridian.ts";
+```
+
+Then in `~/.config/opencode/opencode.json`:
+
+```json
+{ "plugin": ["/etc/meridian/plugin/meridian.ts"] }
+```
+
+> **Important:** Do not use `meridian setup` on NixOS. It writes an absolute Nix store path (e.g. `/nix/store/...-meridian-1.x.x/lib/...`) into your OpenCode config, which will break on the next `nixos-rebuild switch` or `home-manager switch` when the store path changes. Use one of the approaches above instead.
+
 ## Why Meridian?
 
 The Claude Code SDK provides programmatic access to Claude. But your favorite coding tools expect an Anthropic API endpoint. Meridian bridges that gap — it runs locally, accepts standard API requests, and routes them through the SDK. Claude Code does the heavy lifting; Meridian translates the output.

@@ -77,6 +77,9 @@
               runHook postInstall
             '';
 
+            # The dist/ output is pre-bundled JS run by node via a wrapper; there
+            # are no native binaries or shebangs that need patching. Skipping
+            # fixup also avoids unnecessary work on a large node_modules tree.
             dontFixup = true;
 
             meta = {
@@ -84,6 +87,7 @@
               homepage = "https://github.com/rynfar/meridian";
               license = pkgs.lib.licenses.mit;
               mainProgram = "meridian";
+              platforms = pkgs.lib.platforms.unix;
             };
           };
 

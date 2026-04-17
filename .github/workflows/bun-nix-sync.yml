@@ -1,0 +1,43 @@
+name: Sync bun.nix
+
+on:
+  pull_request:
+    paths:
+      - bun.lock
+      - package.json
+      - bun.nix
+  push:
+    branches: [main]
+    paths:
+      - bun.lock
+      - package.json
+
+jobs:
+  verify:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bun run nix:lock
+      - run: |
+          git diff --exit-code bun.nix || {
+            echo "::error::bun.nix is out of sync — run 'bun run nix:lock' locally and commit the result"
+            exit 1
+          }
+
+  sync:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bun run nix:lock
+      - uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore: sync bun.nix"
+          file_pattern: bun.nix

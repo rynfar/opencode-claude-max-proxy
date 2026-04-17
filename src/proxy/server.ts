@@ -302,7 +302,7 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
         const agentMode = c.req.header("x-opencode-agent-mode") ?? null
         // Opaque tag clients can send to distinguish concurrent request flows
         // from the same conversation (e.g., pylon's main chat vs. memory-extract fork vs. subagent).
-        // Used only for observability — does not affect routing, caching, or session behavior.
+        // Logged for observability; fork-*/subagent-* values also skip fingerprint cache (see below).
         // Examples: "main", "fork-memory-extract", "subagent-scout".
         const requestSource = c.req.header("x-meridian-source")?.slice(0, 64) || undefined
         let model = mapModelToClaudeModel(body.model || "sonnet", authStatus?.subscriptionType, agentMode)
@@ -450,7 +450,7 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
 
         // Recovery logging: when a session diverges, check if the store has a
         // previous session ID that the user can recover via `claude --resume`.
-        if (lineageResult.type === "diverged" && profileSessionId) {
+        if (lineageResult.type === "diverged" && profileSessionId && !isIndependentSession) {
           const recovery = lookupSessionRecovery(profileSessionId)
           if (recovery) {
             const prevId = recovery.previousClaudeSessionId || recovery.claudeSessionId

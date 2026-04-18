@@ -126,7 +126,12 @@ export function runTransformHook<T>(
     const fn = transform[hook] as ((ctx: T) => T) | undefined
     if (!fn) return acc
     if (transform.adapters && !transform.adapters.includes(adapterName)) return acc
-    return fn.call(transform, acc)
+    try {
+      return fn.call(transform, acc)
+    } catch (err) {
+      console.error(`[PLUGIN] Transform "${transform.name}" threw in ${hook}: ${err instanceof Error ? err.message : String(err)}`)
+      return acc
+    }
   }, ctx)
 }
 
@@ -144,7 +149,11 @@ export function runObserveHook<T>(
     const fn = transform[hook] as ((ctx: T) => void) | undefined
     if (!fn) continue
     if (transform.adapters && !transform.adapters.includes(adapterName)) continue
-    fn.call(transform, ctx)
+    try {
+      fn.call(transform, ctx)
+    } catch (err) {
+      console.error(`[PLUGIN] Transform "${transform.name}" threw in ${hook}: ${err instanceof Error ? err.message : String(err)}`)
+    }
   }
 }
 

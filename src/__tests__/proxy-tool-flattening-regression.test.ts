@@ -26,6 +26,7 @@ interface CapturedParams {
 }
 let capturedParams: CapturedParams | null = null
 let queuedSessionIds: string[] = []
+function getCaptured(): CapturedParams | null { return capturedParams }
 
 mock.module("@anthropic-ai/claude-agent-sdk", () => ({
   query: (params: unknown) => {
@@ -141,8 +142,8 @@ describe("Issue #386 — tool_use blocks must not leak into SDK prompt as text",
     await postWithSession(app, "sess-continue", history, "sdk-continue")
 
     // Must resume (lineage=continuation) and must not have flattened tool blocks into text
-    expect(capturedParams?.options?.resume).toBe("sdk-continue")
-    assertNoFlattenedToolBlocks(capturedParams?.prompt)
+    expect(getCaptured()?.options?.resume).toBe("sdk-continue")
+    assertNoFlattenedToolBlocks(getCaptured()?.prompt)
   })
 
   it("headered session: proxy restart (cache cleared) must still rehydrate without flattening", async () => {
@@ -162,7 +163,7 @@ describe("Issue #386 — tool_use blocks must not leak into SDK prompt as text",
 
     // After restart, shared-store lookup should find the session → continuation
     // (delta only). Critically, tool_use/tool_result must NOT leak as text.
-    assertNoFlattenedToolBlocks(capturedParams?.prompt)
+    assertNoFlattenedToolBlocks(getCaptured()?.prompt)
   })
 
   it("headered session: new session header on rehydration (session lost) must not flatten", async () => {
@@ -179,7 +180,7 @@ describe("Issue #386 — tool_use blocks must not leak into SDK prompt as text",
 
     // This is where fingerprint fallback would have saved us in the old code.
     // Whatever the final lineage decision, tool_use blocks must not be flattened.
-    assertNoFlattenedToolBlocks(capturedParams?.prompt)
+    assertNoFlattenedToolBlocks(getCaptured()?.prompt)
   })
 
   it("headerless session: full rehydration path must not flatten tool_use blocks", async () => {
@@ -212,6 +213,6 @@ describe("Issue #386 — tool_use blocks must not leak into SDK prompt as text",
       }),
     })).then(r => r.json())
 
-    assertNoFlattenedToolBlocks(capturedParams?.prompt)
+    assertNoFlattenedToolBlocks(getCaptured()?.prompt)
   })
 })

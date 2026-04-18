@@ -649,6 +649,27 @@ Health response example:
 
 `plugin.opencode` is `"configured"` when `meridian setup` has been run, `"not-configured"` otherwise.
 
+## Plugins
+
+Extend Meridian's behavior with composable plugins — no core modifications needed.
+
+**Quick start:** Drop a `.ts` or `.js` file in `~/.config/meridian/plugins/` and restart.
+
+```ts
+// ~/.config/meridian/plugins/my-plugin.ts
+export default {
+  name: "my-plugin",
+  onRequest(ctx) {
+    // modify request context
+    return { ...ctx, systemContext: ctx.systemContext + "\nBe concise." }
+  },
+}
+```
+
+- **Manage plugins** at `http://localhost:3456/plugins`
+- **Reload without restart:** `POST /plugins/reload`
+- **Full guide:** See [PLUGINS.md](PLUGINS.md)
+
 ## CLI Commands
 
 | Command | Description |

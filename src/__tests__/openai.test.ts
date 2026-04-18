@@ -28,11 +28,11 @@ describe("extractOpenAiContent", () => {
     ])).toBe("hello world")
   })
 
-  it("skips non-text content parts", () => {
+  it("summarizes image parts in text extraction", () => {
     expect(extractOpenAiContent([
-      { type: "image_url", text: undefined },
+      { type: "image_url", image_url: { url: "data:image/png;base64,abc" } },
       { type: "text", text: "only this" },
-    ])).toBe("only this")
+    ])).toBe("[Image attached]only this")
   })
 
   it("returns empty string for empty array", () => {
@@ -186,7 +186,26 @@ describe("translateOpenAiToAnthropic", () => {
     expect(result!.system).toContain("assistant: Hello")
   })
 
-  it("handles structured content in messages", () => {
+  it("keeps multimodal history as placeholders in packed system context", () => {
+    const result = translateOpenAiToAnthropic({
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "look" },
+            { type: "image_url", image_url: { url: "data:image/png;base64,abc123" } },
+          ],
+        },
+        { role: "assistant", content: "I see it" },
+        { role: "user", content: "now answer" },
+      ],
+    })
+
+    expect(result!.system).toContain('user: look[Image attached]')
+    expect(result!.messages).toEqual([{ role: 'user', content: 'now answer' }])
+  })
+
+  it("handles structured text content in messages", () => {
     const result = translateOpenAiToAnthropic({
       messages: [{
         role: "user",
@@ -194,6 +213,46 @@ describe("translateOpenAiToAnthropic", () => {
       }],
     })
     expect(result!.messages[0]!.content).toBe("structured")
+  })
+
+  it("preserves data-url image blocks in the last user message", () => {
+    const result = translateOpenAiToAnthropic({
+      messages: [{
+        role: "user",
+        content: [
+          { type: "text", text: "describe this" },
+          { type: "image_url", image_url: { url: "data:image/png;base64,abc123" } },
+        ],
+      }],
+    })
+
+    expect(result!.messages).toEqual([{
+      role: "user",
+      content: [
+        { type: "text", text: "describe this" },
+        { type: "image", source: { type: "base64", media_type: "image/png", data: "abc123" } },
+      ],
+    }])
+  })
+
+  it("adds an explicit placeholder for unsupported external image urls", () => {
+    const result = translateOpenAiToAnthropic({
+      messages: [{
+        role: "user",
+        content: [
+          { type: "text", text: "describe this" },
+          { type: "image_url", image_url: { url: "https://example.com/test.png" } },
+        ],
+      }],
+    })
+
+    expect(result!.messages).toEqual([{
+      role: "user",
+      content: [
+        { type: "text", text: "describe this" },
+        { type: "text", text: "[Unsupported image_url omitted: only data URLs are currently supported]" },
+      ],
+    }])
   })
 
   it("sets stream from body", () => {

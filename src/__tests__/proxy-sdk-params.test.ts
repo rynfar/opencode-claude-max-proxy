@@ -462,6 +462,65 @@ describe("GET /v1/sessions/:claudeSessionId/context-usage", () => {
     expect(usage.output_tokens).toBe(6)
   })
 
+  it("returns the last usage iteration when the SDK reports cumulative top-level usage", async () => {
+    const claudeSessionId = "sess_usage_iterations_001"
+    mockMessages = [{
+      type: "assistant",
+      message: {
+        id: "msg_iterations",
+        type: "message",
+        role: "assistant",
+        content: [{ type: "text", text: "ok" }],
+        model: "claude-haiku-4-5-20251001",
+        stop_reason: "end_turn",
+        usage: {
+          input_tokens: 5000,
+          cache_creation_input_tokens: 150000,
+          cache_read_input_tokens: 600000,
+          output_tokens: 1000,
+          iterations: [
+            {
+              input_tokens: 5000,
+              cache_creation_input_tokens: 150000,
+              cache_read_input_tokens: 600000,
+              output_tokens: 1000,
+              type: "message",
+            },
+            {
+              input_tokens: 3000,
+              cache_creation_input_tokens: 2000,
+              cache_read_input_tokens: 4000,
+              output_tokens: 200,
+              type: "message",
+            },
+          ],
+        },
+      },
+      parent_tool_use_id: null,
+      uuid: crypto.randomUUID(),
+      session_id: claudeSessionId,
+    }]
+
+    const app = createTestApp()
+    await post(app, { ...BASE_BODY, "x-opencode-session": "agent-session-iterations" }, {
+      "x-opencode-session": "agent-session-iterations",
+    })
+
+    const res = await app.fetch(
+      new Request(`http://localhost/v1/sessions/${claudeSessionId}/context-usage`)
+    )
+    expect(res.status).toBe(200)
+    const body = await res.json() as Record<string, unknown>
+    const usage = body.context_usage as Record<string, unknown>
+    expect(body.session_id).toBe(claudeSessionId)
+    expect(usage.input_tokens).toBe(3000)
+    expect(usage.cache_creation_input_tokens).toBe(2000)
+    expect(usage.cache_read_input_tokens).toBe(4000)
+    expect(usage.output_tokens).toBe(200)
+    expect(usage.type).toBe("message")
+    expect(usage.iterations).toBeUndefined()
+  })
+
   it("returns 404 when session exists but has no usage data", async () => {
     // Sessions from before usage tracking was added won't have contextUsage
     const { storeSession } = await import("../proxy/session/cache")

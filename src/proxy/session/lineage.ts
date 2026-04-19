@@ -12,11 +12,17 @@ import { diagnosticLog } from "../../telemetry"
 // --- Types ---
 
 /** Token usage counters from the SDK (subset of Anthropic usage object). */
-export interface TokenUsage {
+export interface TokenUsageIteration {
   input_tokens?: number
   output_tokens?: number
   cache_read_input_tokens?: number
   cache_creation_input_tokens?: number
+  type?: string
+}
+
+/** Token usage counters from the SDK, including optional iteration breakdowns. */
+export interface TokenUsage extends TokenUsageIteration {
+  iterations?: TokenUsageIteration[]
 }
 
 /** Minimum suffix overlap (stored messages found at the end of incoming)

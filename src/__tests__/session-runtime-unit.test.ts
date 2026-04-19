@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test"
 import type { Query, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk"
 
 import {
+  classifyPassthroughRequest,
   createAsyncQueue,
   createMutex,
   createSessionRuntime,
@@ -185,6 +186,151 @@ describe("SessionRuntime", () => {
     })
     await runtime.close()
     await expect(runtime.acquireTurn()).rejects.toThrow(/closed/)
+  })
+})
+
+describe("classifyPassthroughRequest", () => {
+  it("diverts matching tool_result blocks to resolve and strips them from pushContent", () => {
+    const content = [
+      { type: "tool_result", tool_use_id: "toolu_1", content: "hello world" },
+      { type: "tool_result", tool_use_id: "toolu_2", content: "second output" },
+    ]
+    const result = classifyPassthroughRequest(content, new Set(["toolu_1", "toolu_2"]))
+    expect(result.resolve).toEqual([
+      { toolUseId: "toolu_1", content: "hello world" },
+      { toolUseId: "toolu_2", content: "second output" },
+    ])
+    expect(result.pushContent).toBeNull()
+  })
+
+  it("keeps unmatched tool_result blocks in pushContent (fallback to plain push)", () => {
+    const content = [
+      { type: "tool_result", tool_use_id: "toolu_1", content: "resolved" },
+      { type: "tool_result", tool_use_id: "toolu_unknown", content: "orphaned" },
+    ]
+    const result = classifyPassthroughRequest(content, new Set(["toolu_1"]))
+    expect(result.resolve).toEqual([{ toolUseId: "toolu_1", content: "resolved" }])
+    expect(result.pushContent).toEqual([
+      { type: "tool_result", tool_use_id: "toolu_unknown", content: "orphaned" },
+    ])
+  })
+
+  it("preserves non-tool_result blocks (text, images) in pushContent", () => {
+    const content = [
+      { type: "text", text: "look at this" },
+      { type: "tool_result", tool_use_id: "toolu_1", content: "result text" },
+      { type: "image", source: { type: "base64", data: "..." } },
+    ]
+    const result = classifyPassthroughRequest(content, new Set(["toolu_1"]))
+    expect(result.resolve).toEqual([{ toolUseId: "toolu_1", content: "result text" }])
+    expect(result.pushContent).toEqual([
+      { type: "text", text: "look at this" },
+      { type: "image", source: { type: "base64", data: "..." } },
+    ])
+  })
+
+  it("flattens tool_result block-array content by joining text subblocks", () => {
+    const content = [
+      {
+        type: "tool_result",
+        tool_use_id: "toolu_1",
+        content: [
+          { type: "text", text: "line one" },
+          { type: "text", text: "line two" },
+        ],
+      },
+    ]
+    const result = classifyPassthroughRequest(content, new Set(["toolu_1"]))
+    expect(result.resolve).toEqual([{ toolUseId: "toolu_1", content: "line one\nline two" }])
+  })
+
+  it("treats a plain string user content as a pure push (no resolve)", () => {
+    const result = classifyPassthroughRequest("hello", new Set(["toolu_1"]))
+    expect(result.resolve).toEqual([])
+    expect(result.pushContent).toEqual([])
+  })
+
+  it("returns empty resolve when pending set is empty", () => {
+    const content = [{ type: "tool_result", tool_use_id: "toolu_1", content: "x" }]
+    const result = classifyPassthroughRequest(content, new Set())
+    expect(result.resolve).toEqual([])
+    expect(result.pushContent).toEqual(content)
+  })
+})
+
+describe("SessionRuntime — pending executions", () => {
+  function emptyRuntime() {
+    return createSessionRuntime({
+      profileSessionId: "p1",
+      optionsHash: "h",
+      query: (async function* () { /* empty */ })() as unknown as Query,
+      inputQueue: createAsyncQueue<SDKUserMessage>(),
+    })
+  }
+
+  it("registerPendingExecution returns a promise that resolves via resolvePendingExecution", async () => {
+    const runtime = emptyRuntime()
+    const resultPromise = runtime.registerPendingExecution("toolu_abc")
+    expect(runtime.pendingCount).toBe(1)
+    expect(runtime.pendingToolUseIds.has("toolu_abc")).toBe(true)
+    const hit = runtime.resolvePendingExecution("toolu_abc", "file contents")
+    expect(hit).toBe(true)
+    const content = await resultPromise
+    expect(content).toBe("file contents")
+    expect(runtime.pendingCount).toBe(0)
+  })
+
+  it("rejectPendingExecution throws the rejection into the awaiting caller", async () => {
+    const runtime = emptyRuntime()
+    const resultPromise = runtime.registerPendingExecution("toolu_abc")
+    const caught = resultPromise.catch((e) => e)
+    const hit = runtime.rejectPendingExecution("toolu_abc", new Error("timeout"))
+    expect(hit).toBe(true)
+    const err = await caught
+    expect(err).toBeInstanceOf(Error)
+    expect((err as Error).message).toMatch(/timeout/)
+    expect(runtime.pendingCount).toBe(0)
+  })
+
+  it("resolve/reject return false for unknown tool_use_ids", () => {
+    const runtime = emptyRuntime()
+    expect(runtime.resolvePendingExecution("toolu_missing", "x")).toBe(false)
+    expect(runtime.rejectPendingExecution("toolu_missing", new Error())).toBe(false)
+  })
+
+  it("rejectAllPending rejects every pending entry and returns the count", async () => {
+    const runtime = emptyRuntime()
+    const p1 = runtime.registerPendingExecution("toolu_1")
+    const p2 = runtime.registerPendingExecution("toolu_2")
+    // Pre-attach rejection handlers so synchronous reject inside rejectAllPending
+    // doesn't fire an unhandled-rejection warning between now and the awaits.
+    const p1Caught = p1.catch((e) => e)
+    const p2Caught = p2.catch((e) => e)
+    expect(runtime.pendingCount).toBe(2)
+    const count = runtime.rejectAllPending(new Error("shutdown"))
+    expect(count).toBe(2)
+    expect(runtime.pendingCount).toBe(0)
+    await expect(p1Caught).resolves.toBeInstanceOf(Error)
+    await expect(p2Caught).resolves.toBeInstanceOf(Error)
+    expect((await p1Caught as Error).message).toMatch(/shutdown/)
+    expect((await p2Caught as Error).message).toMatch(/shutdown/)
+  })
+
+  it("close() rejects all pending handlers so the SDK unblocks", async () => {
+    const runtime = emptyRuntime()
+    const pending = runtime.registerPendingExecution("toolu_abc")
+    const caught = pending.catch((e) => e)
+    await runtime.close()
+    const result = await caught
+    expect(result).toBeInstanceOf(Error)
+    expect((result as Error).message).toMatch(/closed/)
+    expect(runtime.pendingCount).toBe(0)
+  })
+
+  it("registerPendingExecution on a closed runtime throws", async () => {
+    const runtime = emptyRuntime()
+    await runtime.close()
+    await expect(runtime.registerPendingExecution("toolu_abc")).rejects.toThrow(/closed/)
   })
 })
 

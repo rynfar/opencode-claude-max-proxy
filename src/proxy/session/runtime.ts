@@ -152,6 +152,78 @@ export function isTurnTerminator(message: SDKMessage): boolean {
   return (message as { type?: unknown }).type === TURN_TERMINATOR_EVENT
 }
 
+// --- Pending tool executions (passthrough deferred-handler pattern) ---
+
+/**
+ * An in-flight client-executed tool call. The passthrough MCP handler
+ * created this entry and is awaiting its `resolve`; meridian resolves with
+ * the real `tool_result` content on the client's next HTTP request (see
+ * design.md §D11 and the §1d spike scenarios).
+ */
+export interface PendingExecution {
+  toolUseId: string
+  createdAt: number
+  resolve: (content: string) => void
+  reject: (err: unknown) => void
+}
+
+/**
+ * Partition of incoming user-message content blocks into two groups:
+ * `resolve` — `tool_result` blocks whose `tool_use_id` matches an existing
+ * pending execution (to be resolved, NOT pushed as input); `pushContent` —
+ * the remainder (to be pushed as an `SDKUserMessage`). Mixed messages keep
+ * their non-tool_result blocks in `pushContent` so text or images still
+ * reach the SDK.
+ */
+export interface PassthroughClassification {
+  resolve: Array<{ toolUseId: string; content: string }>
+  pushContent: unknown[] | null
+}
+
+function extractToolResultText(content: unknown): string {
+  if (typeof content === "string") return content
+  if (!Array.isArray(content)) return String(content ?? "")
+  // Anthropic tool_result content is `string | ContentBlockParam[]`; for the
+  // block form we flatten text blocks into a single string.
+  const parts: string[] = []
+  for (const b of content) {
+    if (!b || typeof b !== "object") continue
+    const block = b as { type?: unknown; text?: unknown }
+    if (block.type === "text" && typeof block.text === "string") parts.push(block.text)
+  }
+  return parts.join("\n")
+}
+
+/**
+ * Partition a user-message content array. Blocks of `type: "tool_result"` whose
+ * `tool_use_id` is in `pendingToolUseIds` are diverted to the `resolve` list;
+ * everything else stays in `pushContent`. If `pushContent` would be an empty
+ * array (all blocks diverted), it becomes `null` to signal "no push needed".
+ */
+export function classifyPassthroughRequest(
+  content: unknown,
+  pendingToolUseIds: ReadonlySet<string>,
+): PassthroughClassification {
+  if (!Array.isArray(content)) {
+    return { resolve: [], pushContent: content === undefined ? null : [] }
+  }
+  const resolve: Array<{ toolUseId: string; content: string }> = []
+  const remainder: unknown[] = []
+  for (const block of content) {
+    if (!block || typeof block !== "object") { remainder.push(block); continue }
+    const b = block as { type?: unknown; tool_use_id?: unknown; content?: unknown }
+    if (b.type === "tool_result" && typeof b.tool_use_id === "string" && pendingToolUseIds.has(b.tool_use_id)) {
+      resolve.push({ toolUseId: b.tool_use_id, content: extractToolResultText(b.content) })
+      continue
+    }
+    remainder.push(block)
+  }
+  return {
+    resolve,
+    pushContent: remainder.length === 0 ? null : remainder,
+  }
+}
+
 // --- SessionRuntime ---
 
 export interface SessionRuntimeInit {
@@ -160,6 +232,8 @@ export interface SessionRuntimeInit {
   query: Query
   inputQueue: AsyncQueue<SDKUserMessage>
   onCrash?: (err: unknown) => void
+  /** Current time source — overridable in tests. */
+  now?: () => number
 }
 
 export interface SessionRuntime {
@@ -181,6 +255,21 @@ export interface SessionRuntime {
    */
   consumeTurn(): AsyncIterable<SDKMessage>
   close(): Promise<void>
+
+  // --- Passthrough deferred-handler registry (design §D11) ---
+
+  /** Register a pending entry that a later client request will resolve. */
+  registerPendingExecution(toolUseId: string): Promise<string>
+  /** Resolve a pending entry with real tool_result content from the client. */
+  resolvePendingExecution(toolUseId: string, content: string): boolean
+  /** Reject a pending entry (timeout, shutdown, explicit cancel). */
+  rejectPendingExecution(toolUseId: string, err: unknown): boolean
+  /** Reject every currently-pending entry — used by shutdown / eviction. */
+  rejectAllPending(err: unknown): number
+  /** Read-only snapshot of pending tool_use_ids; used by request classifier. */
+  readonly pendingToolUseIds: ReadonlySet<string>
+  /** How many pending handlers are currently awaiting. */
+  readonly pendingCount: number
 }
 
 export function createSessionRuntime(init: SessionRuntimeInit): SessionRuntime {
@@ -194,6 +283,10 @@ export function createSessionRuntime(init: SessionRuntimeInit): SessionRuntime {
   // causes subsequent next() calls to yield `{done: true}`. Manual iteration
   // via `.next()` preserves the query across turns.
   const queryIter: AsyncIterator<SDKMessage, void> = (init.query as AsyncIterator<SDKMessage, void>)
+  const now = init.now ?? (() => Date.now())
+
+  // Pending deferred handlers for passthrough tool execution.
+  const pending = new Map<string, PendingExecution>()
 
   const runtime: SessionRuntime = {
     profileSessionId: init.profileSessionId,
@@ -232,8 +325,65 @@ export function createSessionRuntime(init: SessionRuntimeInit): SessionRuntime {
     async close(): Promise<void> {
       if (closed) return
       closed = true
+      // Reject every pending handler so the SDK unblocks and the subprocess
+      // can terminate cleanly.
+      for (const [, entry] of pending) {
+        try { entry.reject(new Error("SessionRuntime closed")) } catch { /* ignore */ }
+      }
+      pending.clear()
       try { init.query.close() } catch { /* ignore */ }
       init.inputQueue.close()
+    },
+
+    async registerPendingExecution(toolUseId: string): Promise<string> {
+      if (closed) {
+        throw new Error(`SessionRuntime ${init.profileSessionId} is closed`)
+      }
+      return await new Promise<string>((resolve, reject) => {
+        pending.set(toolUseId, {
+          toolUseId,
+          createdAt: now(),
+          resolve: (content: string) => {
+            pending.delete(toolUseId)
+            resolve(content)
+          },
+          reject: (err: unknown) => {
+            pending.delete(toolUseId)
+            reject(err instanceof Error ? err : new Error(String(err)))
+          },
+        })
+      })
+    },
+
+    resolvePendingExecution(toolUseId: string, content: string): boolean {
+      const entry = pending.get(toolUseId)
+      if (!entry) return false
+      entry.resolve(content)
+      return true
+    },
+
+    rejectPendingExecution(toolUseId: string, err: unknown): boolean {
+      const entry = pending.get(toolUseId)
+      if (!entry) return false
+      entry.reject(err)
+      return true
+    },
+
+    rejectAllPending(err: unknown): number {
+      const count = pending.size
+      for (const [, entry] of pending) {
+        try { entry.reject(err) } catch { /* ignore */ }
+      }
+      pending.clear()
+      return count
+    },
+
+    get pendingToolUseIds(): ReadonlySet<string> {
+      return new Set(pending.keys())
+    },
+
+    get pendingCount(): number {
+      return pending.size
     },
   }
   return runtime

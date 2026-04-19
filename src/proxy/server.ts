@@ -63,6 +63,58 @@ const exec = promisify(execCallback)
 
 let claudeExecutable = ""
 
+const MULTIMODAL_TYPES = new Set(["image", "document", "file"])
+
+function hasMultimodalContent(content: any): boolean {
+  if (!Array.isArray(content)) return false
+  return content.some((block: any) => {
+    if (!block || typeof block !== "object") return false
+    if (MULTIMODAL_TYPES.has(block.type)) return true
+    if (block.type === "tool_result") return hasMultimodalContent(block.content)
+    return false
+  })
+}
+
+function stripCacheControlDeep(content: any): any {
+  if (!Array.isArray(content)) return content
+  return content.map((block: any) => {
+    if (!block || typeof block !== "object") return block
+    const { cache_control, ...rest } = block
+    if (block.type === "tool_result" && Array.isArray(block.content)) {
+      return {
+        ...rest,
+        content: stripCacheControlDeep(block.content),
+      }
+    }
+    return rest
+  })
+}
+
+function normalizeStructuredUserContent(content: any): any {
+  if (!Array.isArray(content)) return content
+  const normalized: any[] = []
+  for (const block of content) {
+    if (!block || typeof block !== "object") continue
+    if (block.type === "tool_result" && Array.isArray(block.content) && hasMultimodalContent(block.content)) {
+      normalized.push(...normalizeStructuredUserContent(block.content))
+      continue
+    }
+    if (block.type === "tool_result" && Array.isArray(block.content)) {
+      normalized.push({
+        ...block,
+        content: normalizeStructuredUserContent(block.content),
+      })
+      continue
+    }
+    normalized.push(block)
+  }
+  return normalized
+}
+
+function isToolUseOnlyAssistantMessage(content: any): boolean {
+  return Array.isArray(content) && content.length > 0 && content.every((block: any) => block?.type === "tool_use")
+}
+
 /**
  * Build a prompt from all messages for a fresh (non-resume) session.
  * Used when retrying after a stale session UUID error.
@@ -72,10 +124,7 @@ function buildFreshPrompt(
   stripCacheControl: (content: any) => any,
   sanitizeOpts: import("./sanitize").SanitizeOptions = {}
 ): string | AsyncIterable<any> {
-  const MULTIMODAL_TYPES = new Set(["image", "document", "file"])
-  const hasMultimodal = messages.some((m) =>
-    Array.isArray(m.content) && m.content.some((b: any) => MULTIMODAL_TYPES.has(b.type))
-  )
+  const hasMultimodal = messages.some((m) => hasMultimodalContent(m.content))
 
   if (hasMultimodal) {
     const structured: Array<{ type: "user"; message: { role: string; content: any }; parent_tool_use_id: null }> = []
@@ -83,10 +132,13 @@ function buildFreshPrompt(
       if (m.role === "user") {
         structured.push({
           type: "user" as const,
-          message: { role: "user" as const, content: stripCacheControl(m.content) },
+          message: { role: "user" as const, content: normalizeStructuredUserContent(stripCacheControl(m.content)) },
           parent_tool_use_id: null,
         })
       } else {
+        if (isToolUseOnlyAssistantMessage(m.content)) {
+          continue
+        }
         let text: string
         if (typeof m.content === "string") {
           text = `[Assistant: ${m.content}]`
@@ -519,22 +571,12 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
       }
 
       // Check if any messages contain multimodal content (images, documents, files)
-      const MULTIMODAL_TYPES = new Set(["image", "document", "file"])
-      const hasMultimodal = messagesToConvert?.some((m: any) =>
-        Array.isArray(m.content) && m.content.some((b: any) => MULTIMODAL_TYPES.has(b.type))
-      )
+      const hasMultimodal = messagesToConvert?.some((m: any) => hasMultimodalContent(m.content))
 
       // Strip cache_control from content blocks — the SDK manages its own caching
       // and OpenCode's ttl='1h' blocks conflict with the SDK's ttl='5m' blocks
       function stripCacheControl(content: any): any {
-        if (!Array.isArray(content)) return content
-        return content.map((block: any) => {
-          if (block.cache_control) {
-            const { cache_control, ...rest } = block
-            return rest
-          }
-          return block
-        })
+        return stripCacheControlDeep(content)
       }
 
       // Build the prompt — either structured (multimodal) or text.
@@ -554,7 +596,7 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
             if (m.role === "user") {
               structuredMessages.push({
                 type: "user" as const,
-                message: { role: "user" as const, content: stripCacheControl(m.content) },
+                message: { role: "user" as const, content: normalizeStructuredUserContent(stripCacheControl(m.content)) },
                 parent_tool_use_id: null,
               })
             }
@@ -565,10 +607,13 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
             if (m.role === "user") {
               structuredMessages.push({
                 type: "user" as const,
-                message: { role: "user" as const, content: stripCacheControl(m.content) },
+                message: { role: "user" as const, content: normalizeStructuredUserContent(stripCacheControl(m.content)) },
                 parent_tool_use_id: null,
               })
             } else {
+              if (isToolUseOnlyAssistantMessage(m.content)) {
+                continue
+              }
               // Convert assistant messages to text summaries
               let text: string
               if (typeof m.content === "string") {

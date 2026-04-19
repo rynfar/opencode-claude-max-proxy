@@ -1,5 +1,35 @@
 # Changelog
 
+## [1.37.8](https://github.com/rynfar/meridian/compare/meridian-v1.37.7...meridian-v1.37.8) (2026-04-19)
+
+
+### Bug Fixes
+
+* use documented releases_created output from release-please-action ([#398](https://github.com/rynfar/meridian/issues/398)) ([906ed6d](https://github.com/rynfar/meridian/commit/906ed6d8b957577b9adf9728004c989c55d01928))
+
+## [1.37.7](https://github.com/rynfar/meridian/compare/meridian-v1.37.6...meridian-v1.37.7) (2026-04-19)
+
+
+### Bug Fixes
+
+* remove skip-labeling from release-please so releases auto-cut on merge ([#395](https://github.com/rynfar/meridian/issues/395)) ([3abf5e9](https://github.com/rynfar/meridian/commit/3abf5e933cb09a24a55fa5ea2342e971804106de))
+
+## [1.37.6](https://github.com/rynfar/meridian/compare/meridian-v1.37.5...meridian-v1.37.6) (2026-04-19)
+
+
+### Bug Fixes
+
+* multimodal image handling for OpenAI chat completions and nested tool_result ([#392](https://github.com/rynfar/meridian/issues/392)) ([39f0f14](https://github.com/rynfar/meridian/commit/39f0f140d1894ff71edc39908430fb647ac435a2))
+
+## [1.37.5](https://github.com/rynfar/meridian/compare/meridian-v1.37.4...meridian-v1.37.5) (2026-04-18)
+
+
+### Bug Fixes
+
+* pass include-component-in-tag on the release-please action input ([#374](https://github.com/rynfar/meridian/issues/374)) ([0d7e272](https://github.com/rynfar/meridian/commit/0d7e272403e3f79046a548b1617df18792017bd0))
+* prevent cross-session context leakage via fingerprint cache for headerless OpenCode requests ([#382](https://github.com/rynfar/meridian/issues/382)) ([83b4bcc](https://github.com/rynfar/meridian/commit/83b4bcc9f46dc07228cb5c4d0566f7ce230db7d9))
+* stop leaking tool_use/tool_result blocks as text into the prompt ([#386](https://github.com/rynfar/meridian/issues/386)) ([#388](https://github.com/rynfar/meridian/issues/388)) ([c3c48b5](https://github.com/rynfar/meridian/commit/c3c48b5886467844aa7e7e854405bca7231a7f17))
+
 ## [1.37.4](https://github.com/rynfar/meridian/compare/meridian-v1.37.3...meridian-v1.37.4) (2026-04-15)
 
 

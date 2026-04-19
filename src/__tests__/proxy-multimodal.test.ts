@@ -140,6 +140,56 @@ describe("Multimodal content", () => {
     expect(typeof capturedQueryParams.prompt).not.toBe("string")
   })
 
+  it("should use structured prompt for images nested inside tool_result content", async () => {
+    const app = createTestApp()
+    await (await post(app, {
+      model: "claude-sonnet-4-5",
+      max_tokens: 1024,
+      stream: false,
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            { type: "tool_use", id: "toolu_123", name: "read", input: { path: "/tmp/test.png" } },
+          ],
+        },
+        {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "toolu_123",
+              content: [
+                { type: "text", text: "Read image file [image/png]" },
+                { type: "image", source: { type: "base64", media_type: "image/png", data: "abc" } },
+              ],
+            },
+            { type: "text", text: "describe the image" },
+          ],
+        },
+      ],
+    })).json()
+
+    expect(typeof capturedQueryParams.prompt).not.toBe("string")
+
+    const messages: any[] = []
+    for await (const msg of capturedQueryParams.prompt) {
+      messages.push(msg)
+    }
+
+    expect(messages.some((m: any) =>
+      typeof m.message?.content === "string" && m.message.content.includes("Tool Use")
+    )).toBe(false)
+
+    const multimodalUserMsg = messages.find((m: any) =>
+      Array.isArray(m.message?.content) &&
+      m.message.content.some((b: any) => b.type === "image")
+    )
+    expect(multimodalUserMsg).toBeDefined()
+    expect(multimodalUserMsg.message.content.some((b: any) => b.type === "text" && b.text.includes("Read image file"))).toBe(true)
+    expect(multimodalUserMsg.message.content.some((b: any) => b.type === "image")).toBe(true)
+  })
+
   it("should include all message roles in structured messages", async () => {
     const app = createTestApp()
     await (await post(app, {

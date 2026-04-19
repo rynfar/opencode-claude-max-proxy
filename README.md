@@ -149,14 +149,14 @@ The Claude Code SDK provides programmatic access to Claude. But your favorite co
 ## Features
 
 - **Standard Anthropic API** — drop-in compatible with any tool that supports a custom `base_url`
-- **OpenAI-compatible API** — `/v1/chat/completions` and `/v1/models` for tools that only speak the OpenAI protocol (Open WebUI, Continue, etc.) — no LiteLLM needed
+- **OpenAI-compatible API** — `/v1/chat/completions` and `/v1/models` for tools that only speak the OpenAI protocol (Open WebUI, Continue, etc.) — no LiteLLM needed, including `image_url` support for data URLs
 - **Session management** — conversations persist across requests, survive compaction and undo, resume after proxy restarts
 - **Streaming** — full SSE streaming with MCP tool filtering
 - **Concurrent sessions** — run parent and subagent requests in parallel
 - **Subagent model selection** — primary agents get 1M context; subagents get 200k, preserving rate-limit budget
 - **Auto token refresh** — expired OAuth tokens are refreshed automatically; requests continue without interruption
 - **Passthrough mode** — forward tool calls to the client instead of executing internally
-- **Multimodal** — images, documents, and file attachments pass through to Claude
+- **Multimodal** — images, documents, file attachments, and multimodal tool results pass through to Claude
 - **Multi-profile** — switch between Claude accounts instantly, no restart needed
 - **Telemetry dashboard** — real-time performance metrics at `/telemetry`, including token usage and prompt cache efficiency ([`MONITORING.md`](MONITORING.md))
 - **Telemetry persistence** — opt-in SQLite storage for telemetry data that survives proxy restarts, with configurable retention
@@ -408,6 +408,9 @@ ANTHROPIC_API_KEY=x ANTHROPIC_BASE_URL=http://127.0.0.1:3456 \
 Meridian speaks the OpenAI protocol natively — no LiteLLM or translation proxy needed.
 
 **`POST /v1/chat/completions`** — accepts OpenAI chat format, returns OpenAI completion format (streaming and non-streaming)
+
+- `image_url` parts are supported when provided as **data URLs** (`data:image/...;base64,...`)
+- multimodal tool flows where a tool returns `tool_result.content = [text, image]` are preserved through the structured multimodal path instead of being flattened to text
 
 **`GET /v1/models`** — returns available Claude models in OpenAI format
 

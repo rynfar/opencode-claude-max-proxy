@@ -63,9 +63,9 @@ describe("loadPlugins", () => {
     `)
     const result = await loadPlugins(pluginDir)
     expect(result.length).toBe(1)
-    expect(result[0].name).toBe("test-plugin")
-    expect(result[0].status).toBe("active")
-    expect(result[0].hooks).toContain("onRequest")
+    expect(result[0]?.name).toBe("test-plugin")
+    expect(result[0]?.status).toBe("active")
+    expect(result[0]?.hooks).toContain("onRequest")
   })
 
   it("skips non-ts/js files", async () => {
@@ -75,7 +75,7 @@ describe("loadPlugins", () => {
     `)
     const result = await loadPlugins(pluginDir)
     expect(result.length).toBe(1)
-    expect(result[0].name).toBe("valid")
+    expect(result[0]?.name).toBe("valid")
   })
 
   it("marks invalid plugins as error", async () => {
@@ -84,8 +84,8 @@ describe("loadPlugins", () => {
     `)
     const result = await loadPlugins(pluginDir)
     expect(result.length).toBe(1)
-    expect(result[0].status).toBe("error")
-    expect(result[0].error).toContain("name")
+    expect(result[0]?.status).toBe("error")
+    expect(result[0]?.error).toContain("name")
   })
 
   it("skips duplicate plugin names", async () => {
@@ -100,7 +100,7 @@ describe("loadPlugins", () => {
     const skipped = result.filter(p => p.status === "error")
     expect(active.length).toBe(1)
     expect(skipped.length).toBe(1)
-    expect(skipped[0].error).toContain("duplicate")
+    expect(skipped[0]?.error).toContain("duplicate")
   })
 
   it("respects plugins.json enabled flag", async () => {
@@ -113,7 +113,7 @@ describe("loadPlugins", () => {
     }))
     const result = await loadPlugins(pluginDir, configPath)
     expect(result.length).toBe(1)
-    expect(result[0].status).toBe("disabled")
+    expect(result[0]?.status).toBe("disabled")
   })
 
   it("respects plugins.json ordering", async () => {
@@ -132,8 +132,8 @@ describe("loadPlugins", () => {
     }))
     const result = await loadPlugins(pluginDir, configPath)
     const active = result.filter(p => p.status === "active")
-    expect(active[0].name).toBe("beta")
-    expect(active[1].name).toBe("alpha")
+    expect(active[0]?.name).toBe("beta")
+    expect(active[1]?.name).toBe("alpha")
   })
 
   it("loads absolute-path plugins from plugins.json even when pluginDir is missing", async () => {
@@ -160,8 +160,8 @@ describe("loadPlugins", () => {
     const result = await loadPlugins(missingPluginDir, configPath)
 
     expect(result.length).toBe(1)
-    expect(result[0].name).toBe("external-plugin")
-    expect(result[0].status).toBe("active")
+    expect(result[0]?.name).toBe("external-plugin")
+    expect(result[0]?.status).toBe("active")
 
     rmSync(externalDir, { recursive: true })
     rmSync(configDir, { recursive: true })

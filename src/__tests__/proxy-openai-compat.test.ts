@@ -24,10 +24,19 @@ import {
 } from "./helpers"
 
 let mockMessages: unknown[] = []
+let capturedPromptMessages: unknown[] = []
 
 mock.module("@anthropic-ai/claude-agent-sdk", () => ({
-  query: () => {
+  query: ({ prompt }: { prompt: string | AsyncIterable<unknown> }) => {
     return (async function* () {
+      capturedPromptMessages = []
+      if (typeof prompt === "string") {
+        capturedPromptMessages.push(prompt)
+      } else {
+        for await (const msg of prompt) {
+          capturedPromptMessages.push(msg)
+        }
+      }
       for (const msg of mockMessages) yield msg
     })()
   },
@@ -66,6 +75,7 @@ async function postChatCompletion(app: ReturnType<typeof createTestApp>, body: R
 describe("POST /v1/chat/completions — non-streaming", () => {
   beforeEach(() => {
     mockMessages = []
+    capturedPromptMessages = []
     clearSessionCache()
   })
 
@@ -161,6 +171,35 @@ describe("POST /v1/chat/completions — non-streaming", () => {
 
     expect(res.headers.get("content-type")).toContain("application/json")
   })
+
+  it("preserves data-url image_url blocks for the SDK prompt", async () => {
+    mockMessages = [assistantMessage([{ type: "text", text: "ok" }])]
+    const app = createTestApp()
+
+    const res = await postChatCompletion(app, {
+      stream: false,
+      messages: [{
+        role: "user",
+        content: [
+          { type: "text", text: "describe this" },
+          { type: "image_url", image_url: { url: "data:image/png;base64,abc123" } },
+        ],
+      }],
+    })
+
+    expect(res.status).toBe(200)
+    expect(capturedPromptMessages).toEqual([{
+      type: "user",
+      message: {
+        role: "user",
+        content: [
+          { type: "text", text: "describe this" },
+          { type: "image", source: { type: "base64", media_type: "image/png", data: "abc123" } },
+        ],
+      },
+      parent_tool_use_id: null,
+    }])
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -170,6 +209,7 @@ describe("POST /v1/chat/completions — non-streaming", () => {
 describe("POST /v1/chat/completions — streaming", () => {
   beforeEach(() => {
     mockMessages = []
+    capturedPromptMessages = []
     clearSessionCache()
   })
 

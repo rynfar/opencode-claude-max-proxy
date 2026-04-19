@@ -21,15 +21,29 @@ jobs:
     if: ${{ !inputs.publish_only }}
     runs-on: ubuntu-latest
     outputs:
-      release_created: ${{ steps.release.outputs['meridian--release_created'] }}
-      tag_name: ${{ steps.release.outputs['meridian--tag_name'] }}
+      # Use the unprefixed boolean release-please-action v4 sets for any-path
+      # release. Previous attempts used 'meridian--release_created' (the
+      # component name) but release-please prefixes outputs by PATH, not
+      # component — for our root-path manifest that would be '.--release_created',
+      # not 'meridian--*'. The 'releases_created' boolean is the documented
+      # top-level output that's true whenever any release was created, which
+      # is exactly what we want for a single-package repo.
+      release_created: ${{ steps.release.outputs.releases_created }}
+      tag_name: ${{ steps.release.outputs['.--tag_name'] }}
     steps:
       - uses: googleapis/release-please-action@v4
         id: release
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
-          skip-labeling: true
+          # Labels ('autorelease: pending' / 'autorelease: tagged') are how
+          # release-please tracks which PR is the active release PR across
+          # runs. With skip-labeling=true release-please never recognized a
+          # merged release PR and never cut a release — every run opened a
+          # fresh release PR with the full history (the 1.37.5/1.37.6 manual
+          # recovery dances). skip-labeling was added to work around a
+          # transient GraphQL "stale PR node" error that no longer applies.
+          #
           # Must be set on the action input (not just per-package config) so the
           # previous-release LOOKUP side matches our `meridian-v<version>` tags.
           # Without this the action looks for `v<version>`, can't find the last

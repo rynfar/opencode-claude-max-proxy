@@ -22,9 +22,24 @@
 
 export type OpenAiRole = "system" | "user" | "assistant"
 
+export interface OpenAiTextPart {
+  type: "text"
+  text?: string
+}
+
+export interface OpenAiImageUrlPart {
+  type: "image_url"
+  image_url?: {
+    url?: string
+  }
+}
+
 export interface OpenAiContentPart {
   type: string
   text?: string
+  image_url?: {
+    url?: string
+  }
 }
 
 export interface OpenAiMessage {
@@ -42,9 +57,25 @@ export interface OpenAiChatRequest {
   top_p?: number
 }
 
+export interface AnthropicTextBlock {
+  type: "text"
+  text: string
+}
+
+export interface AnthropicImageBlock {
+  type: "image"
+  source: {
+    type: "base64"
+    media_type: string
+    data: string
+  }
+}
+
+export type AnthropicInputContentBlock = AnthropicTextBlock | AnthropicImageBlock
+
 export interface AnthropicMessage {
   role: "user" | "assistant"
-  content: string
+  content: string | AnthropicInputContentBlock[]
 }
 
 export interface AnthropicRequestBody {
@@ -118,12 +149,77 @@ export interface OpenAiModel {
 /**
  * Normalise an OpenAI message content field to a plain string.
  * Handles both string content and structured content arrays.
+ * Non-text blocks are summarized so history packing does not silently erase
+ * multimodal context.
  */
 export function extractOpenAiContent(content: string | OpenAiContentPart[]): string {
   if (typeof content === "string") return content
   return content
-    .filter(p => p.type === "text" && typeof p.text === "string")
-    .map(p => p.text!)
+    .map((p) => {
+      if (p.type === "text" && typeof p.text === "string") return p.text
+      if (p.type === "image_url") return "[Image attached]"
+      return ""
+    })
+    .filter(Boolean)
+    .join("")
+}
+
+function parseDataUrlImage(url: string): AnthropicImageBlock | null {
+  const match = /^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/s.exec(url)
+  if (!match) return null
+  const mediaType = match[1]
+  const data = match[2]
+  if (!mediaType || !data) return null
+  return {
+    type: "image",
+    source: {
+      type: "base64",
+      media_type: mediaType,
+      data,
+    },
+  }
+}
+
+function translateOpenAiContentToAnthropic(content: string | OpenAiContentPart[]): string | AnthropicInputContentBlock[] {
+  if (typeof content === "string") return content
+
+  const parts: AnthropicInputContentBlock[] = []
+
+  for (const part of content) {
+    if (part.type === "text" && typeof part.text === "string") {
+      parts.push({ type: "text", text: part.text })
+      continue
+    }
+
+    if (part.type === "image_url") {
+      const url = part.image_url?.url
+      if (typeof url === "string") {
+        const parsed = parseDataUrlImage(url)
+        if (parsed) {
+          parts.push(parsed)
+          continue
+        }
+      }
+      parts.push({ type: "text", text: "[Unsupported image_url omitted: only data URLs are currently supported]" })
+    }
+  }
+
+  if (parts.length === 1 && parts[0]?.type === "text") {
+    return parts[0].text
+  }
+
+  return parts
+}
+
+function summarizeAnthropicContent(content: string | AnthropicInputContentBlock[]): string {
+  if (typeof content === "string") return content
+  return content
+    .map((part) => {
+      if (part.type === "text") return part.text
+      if (part.type === "image") return "[Image attached]"
+      return ""
+    })
+    .filter(Boolean)
     .join("")
 }
 
@@ -152,7 +248,7 @@ export function translateOpenAiToAnthropic(body: OpenAiChatRequest): AnthropicRe
     } else {
       turns.push({
         role: msg.role === "assistant" ? "assistant" : "user",
-        content: text,
+        content: translateOpenAiContentToAnthropic(msg.content ?? ""),
       })
     }
   }
@@ -165,7 +261,7 @@ export function translateOpenAiToAnthropic(body: OpenAiChatRequest): AnthropicRe
 
   if (turns.length > 1) {
     const history = turns.slice(0, -1)
-      .map(m => `${m.role}: ${m.content}`)
+      .map(m => `${m.role}: ${summarizeAnthropicContent(m.content)}`)
       .join("\n")
     const historyBlock =
       `<conversation_history>\n${history}\n</conversation_history>\n\n` +

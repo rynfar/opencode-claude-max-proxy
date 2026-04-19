@@ -81,19 +81,117 @@ const exec = promisify(execCallback)
 
 let claudeExecutable = ""
 
+const MULTIMODAL_TYPES = new Set(["image", "document", "file"])
+
+function hasMultimodalContent(content: any): boolean {
+  if (!Array.isArray(content)) return false
+  return content.some((block: any) => {
+    if (!block || typeof block !== "object") return false
+    if (MULTIMODAL_TYPES.has(block.type)) return true
+    if (block.type === "tool_result") return hasMultimodalContent(block.content)
+    return false
+  })
+}
+
+function stripCacheControlDeep(content: any): any {
+  if (!Array.isArray(content)) return content
+  return content.map((block: any) => {
+    if (!block || typeof block !== "object") return block
+    const { cache_control, ...rest } = block
+    if (block.type === "tool_result" && Array.isArray(block.content)) {
+      return {
+        ...rest,
+        content: stripCacheControlDeep(block.content),
+      }
+    }
+    return rest
+  })
+}
+
+function normalizeStructuredUserContent(content: any): any {
+  if (!Array.isArray(content)) return content
+  const normalized: any[] = []
+  for (const block of content) {
+    if (!block || typeof block !== "object") continue
+    if (block.type === "tool_result" && Array.isArray(block.content) && hasMultimodalContent(block.content)) {
+      normalized.push(...normalizeStructuredUserContent(block.content))
+      continue
+    }
+    if (block.type === "tool_result" && Array.isArray(block.content)) {
+      normalized.push({
+        ...block,
+        content: normalizeStructuredUserContent(block.content),
+      })
+      continue
+    }
+    normalized.push(block)
+  }
+  return normalized
+}
+
+/**
+ * Flatten an assistant message's content to plain text for replay.
+ *
+ * Drops tool_use blocks entirely. The SDK already has them from its own
+ * session state (on resume) or doesn't need them for text-only replay
+ * (on rehydration). Emitting `[Tool Use: name(args)]` strings pollutes
+ * the context — the model reads them as literal user input and starts
+ * inventing fake tool-call patterns back (issue #111, #386).
+ */
+function flattenAssistantContent(content: any): string {
+  if (typeof content === "string") return content
+  if (!Array.isArray(content)) return String(content ?? "")
+  return content
+    .map((b: any) => (b?.type === "text" && b.text ? b.text : ""))
+    .filter(Boolean)
+    .join("\n")
+}
+
+/**
+ * Flatten a user message's content to plain text for replay.
+ *
+ * Unwraps tool_result blocks — emit just the raw result content so the
+ * model sees a natural "here's the output" user turn instead of
+ * `[Tool Result for toolu_xxx: ...]` noise (issue #111, #386).
+ */
+function flattenUserContent(
+  content: any,
+  sanitizeOpts: import("./sanitize").SanitizeOptions = {}
+): string {
+  if (typeof content === "string") return sanitizeTextContent(content, sanitizeOpts)
+  if (!Array.isArray(content)) return String(content ?? "")
+  return content
+    .map((b: any) => {
+      if (b?.type === "text" && b.text) return sanitizeTextContent(b.text, sanitizeOpts)
+      if (b?.type === "tool_result") {
+        const inner = b.content
+        if (typeof inner === "string") return inner
+        if (Array.isArray(inner)) {
+          return inner
+            .map((ib: any) => (ib?.type === "text" && ib.text ? ib.text : ""))
+            .filter(Boolean)
+            .join("\n")
+        }
+        return ""
+      }
+      if (b?.type === "image") return "[Image attached]"
+      if (b?.type === "document") return "[Document attached]"
+      if (b?.type === "file") return "[File attached]"
+      return ""
+    })
+    .filter(Boolean)
+    .join("\n")
+}
+
 /**
  * Build a prompt from all messages for a fresh (non-resume) session.
  * Used when retrying after a stale session UUID error.
  */
 function buildFreshPrompt(
   messages: Array<{ role: string; content: any }>,
-  stripCacheControl: (content: any) => any,
   sanitizeOpts: import("./sanitize").SanitizeOptions = {}
 ): string | AsyncIterable<any> {
-  const MULTIMODAL_TYPES = new Set(["image", "document", "file"])
-  const hasMultimodal = messages.some((m) =>
-    Array.isArray(m.content) && m.content.some((b: any) => MULTIMODAL_TYPES.has(b.type))
-  )
+  const hasMultimodal = messages.some((m) => hasMultimodalContent(m.content))
 
   if (hasMultimodal) {
     const structured: Array<{ type: "user"; message: { role: string; content: any }; parent_tool_use_id: null }> = []
@@ -101,28 +199,20 @@ function buildFreshPrompt(
       if (m.role === "user") {
         structured.push({
           type: "user" as const,
-          message: { role: "user" as const, content: stripCacheControl(m.content) },
+          message: { role: "user" as const, content: normalizeStructuredUserContent(stripCacheControlDeep(m.content)) },
           parent_tool_use_id: null,
         })
       } else {
-        let text: string
-        if (typeof m.content === "string") {
-          text = `[Assistant: ${m.content}]`
-        } else if (Array.isArray(m.content)) {
-          text = m.content.map((b: any) => {
-            if (b.type === "text" && b.text) return `[Assistant: ${b.text}]`
-            if (b.type === "tool_use") return `[Tool Use: ${b.name}(${JSON.stringify(b.input)})]`
-            if (b.type === "tool_result") return `[Tool Result: ${typeof b.content === "string" ? b.content : JSON.stringify(b.content)}]`
-            return ""
-          }).filter(Boolean).join("\n")
-        } else {
-          text = `[Assistant: ${String(m.content)}]`
+        // Drops tool_use blocks and skips tool-use-only assistant messages
+        // (flattenAssistantContent returns "" for those).
+        const assistantText = flattenAssistantContent(m.content)
+        if (assistantText) {
+          structured.push({
+            type: "user" as const,
+            message: { role: "user" as const, content: `[Assistant: ${assistantText}]` },
+            parent_tool_use_id: null,
+          })
         }
-        structured.push({
-          type: "user" as const,
-          message: { role: "user" as const, content: text },
-          parent_tool_use_id: null,
-        })
       }
     }
     return (async function* () { for (const msg of structured) yield msg })()
@@ -131,27 +221,12 @@ function buildFreshPrompt(
   return messages
     .map((m) => {
       const role = m.role === "assistant" ? "Assistant" : "Human"
-      let content: string
-      if (typeof m.content === "string") {
-        content = sanitizeTextContent(m.content, sanitizeOpts)
-      } else if (Array.isArray(m.content)) {
-        content = m.content
-          .map((block: any) => {
-            if (block.type === "text" && block.text) return sanitizeTextContent(block.text, sanitizeOpts)
-            if (block.type === "tool_use") return `[Tool Use: ${block.name}(${JSON.stringify(block.input)})]`
-            if (block.type === "tool_result") return `[Tool Result for ${block.tool_use_id}: ${typeof block.content === "string" ? block.content : JSON.stringify(block.content)}]`
-            if (block.type === "image") return "[Image attached]"
-            if (block.type === "document") return "[Document attached]"
-            if (block.type === "file") return "[File attached]"
-            return ""
-          })
-          .filter(Boolean)
-          .join("\n")
-      } else {
-        content = String(m.content)
-      }
-      return `${role}: ${content}`
+      const content = m.role === "assistant"
+        ? flattenAssistantContent(m.content)
+        : flattenUserContent(m.content, sanitizeOpts)
+      return content ? `${role}: ${content}` : ""
     })
+    .filter(Boolean)
     .join("\n\n") || ""
 }
 
@@ -558,23 +633,7 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
       }
 
       // Check if any messages contain multimodal content (images, documents, files)
-      const MULTIMODAL_TYPES = new Set(["image", "document", "file"])
-      const hasMultimodal = messagesToConvert?.some((m: any) =>
-        Array.isArray(m.content) && m.content.some((b: any) => MULTIMODAL_TYPES.has(b.type))
-      )
-
-      // Strip cache_control from content blocks — the SDK manages its own caching
-      // and OpenCode's ttl='1h' blocks conflict with the SDK's ttl='5m' blocks
-      function stripCacheControl(content: any): any {
-        if (!Array.isArray(content)) return content
-        return content.map((block: any) => {
-          if (block.cache_control) {
-            const { cache_control, ...rest } = block
-            return rest
-          }
-          return block
-        })
-      }
+      const hasMultimodal = messagesToConvert?.some((m: any) => hasMultimodalContent(m.content))
 
       // Build the prompt — either structured (multimodal) or text.
       // Structured prompts are stored as arrays so they can be replayed on retry.
@@ -593,7 +652,7 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
             if (m.role === "user") {
               structuredMessages.push({
                 type: "user" as const,
-                message: { role: "user" as const, content: stripCacheControl(m.content) },
+                message: { role: "user" as const, content: normalizeStructuredUserContent(stripCacheControlDeep(m.content)) },
                 parent_tool_use_id: null,
               })
             }
@@ -604,29 +663,20 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
             if (m.role === "user") {
               structuredMessages.push({
                 type: "user" as const,
-                message: { role: "user" as const, content: stripCacheControl(m.content) },
+                message: { role: "user" as const, content: normalizeStructuredUserContent(stripCacheControlDeep(m.content)) },
                 parent_tool_use_id: null,
               })
             } else {
-              // Convert assistant messages to text summaries
-              let text: string
-              if (typeof m.content === "string") {
-                text = `[Assistant: ${m.content}]`
-              } else if (Array.isArray(m.content)) {
-                text = m.content.map((b: any) => {
-                  if (b.type === "text" && b.text) return `[Assistant: ${b.text}]`
-                  if (b.type === "tool_use") return `[Tool Use: ${b.name}(${JSON.stringify(b.input)})]`
-                  if (b.type === "tool_result") return `[Tool Result: ${typeof b.content === "string" ? b.content : JSON.stringify(b.content)}]`
-                  return ""
-                }).filter(Boolean).join("\n")
-              } else {
-                text = `[Assistant: ${String(m.content)}]`
+              // Drops tool_use blocks and skips tool-use-only assistant messages
+              // (flattenAssistantContent returns "" for those).
+              const assistantText = flattenAssistantContent(m.content)
+              if (assistantText) {
+                structuredMessages.push({
+                  type: "user" as const,
+                  message: { role: "user" as const, content: `[Assistant: ${assistantText}]` },
+                  parent_tool_use_id: null,
+                })
               }
-              structuredMessages.push({
-                type: "user" as const,
-                message: { role: "user" as const, content: text },
-                parent_tool_use_id: null,
-              })
             }
           }
         }
@@ -638,29 +688,14 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
         // through it (Droid) — preserved otherwise so that harness state
         // like oh-my-opencode's background-task IDs reaches the model.
         textPrompt = messagesToConvert
-          ?.map((m: { role: string; content: string | Array<{ type: string; text?: string; content?: string; tool_use_id?: string; name?: string; input?: unknown; id?: string }> }) => {
+          ?.map((m: { role: string; content: any }) => {
             const role = m.role === "assistant" ? "Assistant" : "Human"
-            let content: string
-            if (typeof m.content === "string") {
-              content = sanitizeTextContent(m.content, sanitizeOpts)
-            } else if (Array.isArray(m.content)) {
-              content = m.content
-                .map((block: any) => {
-                  if (block.type === "text" && block.text) return sanitizeTextContent(block.text, sanitizeOpts)
-                  if (block.type === "tool_use") return `[Tool Use: ${block.name}(${JSON.stringify(block.input)})]`
-                  if (block.type === "tool_result") return `[Tool Result for ${block.tool_use_id}: ${typeof block.content === "string" ? block.content : JSON.stringify(block.content)}]`
-                  if (block.type === "image") return "[Image attached]"
-                  if (block.type === "document") return "[Document attached]"
-                  if (block.type === "file") return "[File attached]"
-                  return ""
-                })
-                .filter(Boolean)
-                .join("\n")
-            } else {
-              content = String(m.content)
-            }
-            return `${role}: ${content}`
+            const content = m.role === "assistant"
+              ? flattenAssistantContent(m.content)
+              : flattenUserContent(m.content, sanitizeOpts)
+            return content ? `${role}: ${content}` : ""
           })
+          .filter(Boolean)
           .join("\n\n") || ""
       }
 
@@ -871,7 +906,7 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
                     sdkUuidMap.length = 0
                     for (let i = 0; i < allMessages.length; i++) sdkUuidMap.push(null)
                     yield* query(buildQueryOptions({
-                      prompt: buildFreshPrompt(allMessages, stripCacheControl, sanitizeOpts),
+                      prompt: buildFreshPrompt(allMessages, sanitizeOpts),
                       model, workingDirectory, systemContext, claudeExecutable,
                       passthrough, stream: false, sdkAgents, passthroughMcp, cleanEnv: profileEnv, hasDeferredTools,
                       resumeSessionId: undefined, isUndo: false, undoRollbackUuid: undefined, sdkHooks, blockedTools: pipelineCtx.blockedTools, incompatibleTools: pipelineCtx.incompatibleTools, mcpServerName: adapter.getMcpServerName(), allowedMcpTools: pipelineCtx.allowedMcpTools, onStderr,
@@ -1289,7 +1324,7 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
                       sdkUuidMap.length = 0
                       for (let i = 0; i < allMessages.length; i++) sdkUuidMap.push(null)
                       yield* query(buildQueryOptions({
-                        prompt: buildFreshPrompt(allMessages, stripCacheControl, sanitizeOpts),
+                        prompt: buildFreshPrompt(allMessages, sanitizeOpts),
                         model, workingDirectory, systemContext, claudeExecutable,
                         passthrough, stream: true, sdkAgents, passthroughMcp, cleanEnv: profileEnv, hasDeferredTools,
                         resumeSessionId: undefined, isUndo: false, undoRollbackUuid: undefined, sdkHooks, blockedTools: pipelineCtx.blockedTools, incompatibleTools: pipelineCtx.incompatibleTools, mcpServerName: adapter.getMcpServerName(), allowedMcpTools: pipelineCtx.allowedMcpTools, onStderr,

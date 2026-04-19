@@ -65,16 +65,69 @@ export function getAutoDeferThreshold(): number {
 }
 
 /**
- * Create an MCP server with tool definitions matching OpenCode's request.
+ * Deferred-mode hook pair used by persistent-mode passthrough (design §D11).
+ *
+ * In persistent mode, each MCP handler invocation:
+ *   1. Calls `dequeueToolUseId(toolName)` to correlate with the tool_use_id
+ *      captured by the PreToolUse hook earlier in the same turn (FIFO per
+ *      tool name; PreToolUse always fires strictly before its MCP handler).
+ *   2. Calls `registerPendingExecution(toolUseId)` on the runtime; blocks on
+ *      the returned promise until meridian resolves it with the real
+ *      tool_result content from the client's next HTTP request.
+ *   3. Returns that content as the MCP handler's `{ content: [{ type: "text",
+ *      text }] }` return value, which the SDK feeds to the model as the
+ *      tool's natural return value — no sentinel, no synthetic blocked
+ *      narrative (see §1d Scenario D in spike-notes.md).
+ *
+ * When `deferredMode` is undefined, handlers fall back to the legacy no-op
+ * "passthrough" text return, preserving the flag-off behavior bit-identically.
+ */
+export interface PassthroughDeferredMode {
+  dequeueToolUseId: (toolName: string) => string | undefined
+  registerPendingExecution: (toolUseId: string) => Promise<string>
+}
+
+export interface CreatePassthroughMcpOptions {
+  deferredMode?: PassthroughDeferredMode
+}
+
+/**
+ * Factory for a single tool's deferred handler. Exported for unit tests; the
+ * full MCP server wraps this for every registered tool via `createPassthroughMcpServer`.
+ */
+export function createDeferredPassthroughHandler(
+  toolName: string,
+  deferredMode: PassthroughDeferredMode,
+): () => Promise<{ content: Array<{ type: "text"; text: string }> }> {
+  return async () => {
+    const toolUseId = deferredMode.dequeueToolUseId(toolName)
+    if (!toolUseId) {
+      throw new Error(
+        `passthrough deferred handler: no captured tool_use_id for ${toolName} ` +
+        `(PreToolUse hook / MCP handler coordination lost)`,
+      )
+    }
+    const content = await deferredMode.registerPendingExecution(toolUseId)
+    return { content: [{ type: "text" as const, text: content }] }
+  }
+}
+
+/**
+ * Create an MCP server with tool definitions matching the agent's request.
  *
  * Auto-defer: when the tool count exceeds the threshold and coreToolNames
  * is provided, non-core tools are registered without alwaysLoad so the SDK
  * defers them. Core tools are marked alwaysLoad to stay in the prompt.
  * Client-provided defer_loading: true also triggers deferral for specific tools.
+ *
+ * Deferred mode (persistent-sdk-sessions): pass a `deferredMode` hook pair to
+ * switch every tool handler into the §D11 deferred-handler pattern. See
+ * `PassthroughDeferredMode` above.
  */
 export function createPassthroughMcpServer(
   tools: Array<{ name: string; description?: string; input_schema?: any; defer_loading?: boolean }>,
-  coreToolNames?: readonly string[]
+  coreToolNames?: readonly string[],
+  options?: CreatePassthroughMcpOptions,
 ) {
   const server = createSdkMcpServer({ name: PASSTHROUGH_MCP_NAME })
   const toolNames: string[] = []
@@ -87,14 +140,27 @@ export function createPassthroughMcpServer(
   // hasDeferredTools is true when: client explicitly defers any tool, OR auto-defer kicks in
   const hasDeferredTools = tools.some(t => t.defer_loading === true) || autoDefer
 
+  const deferredMode = options?.deferredMode
+
+  // Build the handler for a given tool. In deferred mode the handler correlates
+  // with the PreToolUse hook via a per-tool-name FIFO of captured tool_use_ids,
+  // registers a pending execution on the runtime, and awaits until the client
+  // sends the real tool_result. Outside deferred mode we keep the legacy no-op
+  // text so flag-off behavior is unchanged.
+  const makeHandler = (toolName: string) =>
+    deferredMode
+      ? createDeferredPassthroughHandler(toolName, deferredMode)
+      : async () => ({ content: [{ type: "text" as const, text: "passthrough" }] })
+
   // Sort tools alphabetically by name to ensure deterministic MCP registration
   // order. Non-deterministic ordering changes the SDK system prompt between
   // requests, invalidating prompt cache and causing full context re-reads.
   const sortedTools = [...tools].sort((a, b) => a.name.localeCompare(b.name))
 
   for (const tool of sortedTools) {
+    const handler = makeHandler(tool.name)
     try {
-      // Convert OpenCode's JSON Schema to Zod for MCP registration
+      // Convert JSON Schema to Zod for MCP registration
       const zodSchema = tool.input_schema?.properties
         ? jsonSchemaToZod(tool.input_schema)
         : z.object({})
@@ -115,7 +181,7 @@ export function createPassthroughMcpServer(
           // - Auto-defer is active and this tool is in the core set
           ...(hasDeferredTools ? (shouldAlwaysLoad(tool, coreSet) ? { _meta: { "anthropic/alwaysLoad": true } } : {}) : {}),
         },
-        async () => ({ content: [{ type: "text" as const, text: "passthrough" }] })
+        handler,
       )
       toolNames.push(`${PASSTHROUGH_MCP_PREFIX}${tool.name}`)
     } catch {
@@ -127,7 +193,7 @@ export function createPassthroughMcpServer(
           inputSchema: { input: z.string().optional() },
           ...(hasDeferredTools ? (shouldAlwaysLoad(tool, coreSet) ? { _meta: { "anthropic/alwaysLoad": true } } : {}) : {}),
         },
-        async () => ({ content: [{ type: "text" as const, text: "passthrough" }] })
+        handler,
       )
       toolNames.push(`${PASSTHROUGH_MCP_PREFIX}${tool.name}`)
     }

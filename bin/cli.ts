@@ -37,6 +37,11 @@ Environment variables:
   MERIDIAN_HOST                     Host to bind to (default: 127.0.0.1)
   MERIDIAN_PASSTHROUGH              Enable passthrough mode (tools forwarded to client)
   MERIDIAN_IDLE_TIMEOUT_SECONDS     Idle timeout in seconds (default: 120)
+  MERIDIAN_PERSISTENT_SESSIONS      Enable one-live-query-per-session (default: 0/off)
+  MERIDIAN_PERSISTENT_IDLE_MS       Idle eviction (default: 900000 = 15 min)
+  MERIDIAN_PERSISTENT_MAX_LIVE      Hard cap on concurrent live runtimes (default: 32)
+  MERIDIAN_PERSISTENT_MUTEX_WAIT_MS Per-turn mutex wait cap → HTTP 429 on timeout (default: 30000)
+  MERIDIAN_PERSISTENT_PENDING_TIMEOUT_MS Deferred-handler idle timeout (default: 900000)
 
 See https://github.com/rynfar/meridian for full documentation.`)
   process.exit(0)
@@ -104,6 +109,24 @@ const port = parseInt(process.env.MERIDIAN_PORT ?? process.env.CLAUDE_PROXY_PORT
 const host = process.env.MERIDIAN_HOST ?? process.env.CLAUDE_PROXY_HOST ?? "127.0.0.1"
 const idleTimeoutSeconds = parseInt(process.env.MERIDIAN_IDLE_TIMEOUT_SECONDS ?? process.env.CLAUDE_PROXY_IDLE_TIMEOUT_SECONDS ?? "120", 10)
 
+// Persistent-SDK-sessions flag (§5.1). Default off preserves today's
+// request-per-process behaviour bit-identically. Set MERIDIAN_PERSISTENT_SESSIONS=1
+// to opt into the one-live-query-per-session path.
+const persistentSessions = process.env.MERIDIAN_PERSISTENT_SESSIONS === "1" ||
+  process.env.MERIDIAN_PERSISTENT_SESSIONS === "true"
+const persistentSessionIdleMs = process.env.MERIDIAN_PERSISTENT_IDLE_MS
+  ? parseInt(process.env.MERIDIAN_PERSISTENT_IDLE_MS, 10)
+  : undefined
+const persistentSessionMaxLive = process.env.MERIDIAN_PERSISTENT_MAX_LIVE
+  ? parseInt(process.env.MERIDIAN_PERSISTENT_MAX_LIVE, 10)
+  : undefined
+const persistentSessionMutexWaitMs = process.env.MERIDIAN_PERSISTENT_MUTEX_WAIT_MS
+  ? parseInt(process.env.MERIDIAN_PERSISTENT_MUTEX_WAIT_MS, 10)
+  : undefined
+const persistentPendingExecutionTimeoutMs = process.env.MERIDIAN_PERSISTENT_PENDING_TIMEOUT_MS
+  ? parseInt(process.env.MERIDIAN_PERSISTENT_PENDING_TIMEOUT_MS, 10)
+  : undefined
+
 // Load profile configuration:
 //   1. MERIDIAN_PROFILES env var (JSON array) — takes precedence
 //   2. ~/.config/meridian/profiles.json — written by `meridian profile add`
@@ -166,7 +189,19 @@ export async function runCli(
     enableDiskProfileDiscovery()
   }
 
-  const proxy = await start({ port, host, idleTimeoutSeconds, profiles, defaultProfile, version })
+  const proxy = await start({
+    port,
+    host,
+    idleTimeoutSeconds,
+    profiles,
+    defaultProfile,
+    version,
+    persistentSessions,
+    ...(persistentSessionIdleMs !== undefined ? { persistentSessionIdleMs } : {}),
+    ...(persistentSessionMaxLive !== undefined ? { persistentSessionMaxLive } : {}),
+    ...(persistentSessionMutexWaitMs !== undefined ? { persistentSessionMutexWaitMs } : {}),
+    ...(persistentPendingExecutionTimeoutMs !== undefined ? { persistentPendingExecutionTimeoutMs } : {}),
+  })
 
   // Handle EADDRINUSE — preserve CLI behavior of exiting on port conflict
   proxy.server.on("error", (error: NodeJS.ErrnoException) => {

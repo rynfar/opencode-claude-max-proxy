@@ -19,34 +19,33 @@
  */
 export const themeCss = `
   :root {
-    /* Core surfaces — lifted slightly from the original purple palette so
-       cards separate from the background and borders are visible. The
-       original #0f0b1a bg read "muddy" because the purple tint lowered
-       perceived contrast; this version keeps the brand color on accents
-       while letting the neutral surfaces do the heavy lifting. */
-    --bg:        #12102a;
-    --surface:   #1f1a3e;
-    --surface2:  #2a2450;
-    --border:    #3a3260;
-    /* Text — lifted to near-white. Muted was a purple-leaning gray (~4.8:1)
-       that failed small-text WCAG AAA; the new #b3a9c7 lands near ~7:1. */
-    --text:      #f1ecff;
-    --muted:     #b3a9c7;
-    /* Brand */
-    --accent:    #a78bfa;
-    --accent2:   #818cf8;
-    --violet:    #c4b5fd;
-    --lavender:  #ddd6fe;
+    /* Cool-gray neutral palette — matches the original dashboard/profiles/
+       settings look. Better for data-dense dashboards: high contrast,
+       surface/border separation, no color cast muddying the text. Purple
+       accents are retained as secondary brand color for hover states,
+       gradients, and a handful of telemetry badges. */
+    --bg:        #0d1117;
+    --surface:   #161b22;
+    --surface2:  #1c2128;
+    --border:    #30363d;
+    /* Text */
+    --text:      #e6edf3;
+    --muted:     #8b949e;
+    /* Brand — blue primary, purple secondary */
+    --accent:    #58a6ff;
+    --accent2:   #bc8cff;
+    --violet:    #bc8cff;
+    --lavender:  #d2a8ff;
     /* Semantic */
-    --green:     #4ade80;
-    --yellow:    #facc15;
-    --red:       #f87171;
+    --green:     #3fb950;
+    --yellow:    #d29922;
+    --red:       #f85149;
     /* Telemetry-specific aliases (waterfall + lineage badges) */
-    --blue:      #818cf8;
-    --purple:    #c4b5fd;
-    --queue:     #facc15;
-    --ttfb:      #818cf8;
-    --upstream:  #a78bfa;
+    --blue:      #58a6ff;
+    --purple:    #bc8cff;
+    --queue:     #d29922;
+    --ttfb:      #58a6ff;
+    --upstream:  #3fb950;
   }
 `
 

@@ -25,6 +25,7 @@ import {
   type SessionRuntimeManager,
   type ReopenCriticalOptions,
   hashReopenCriticalOptions,
+  markRuntimeContinuation,
 } from "./runtime"
 import {
   dispatchPersistentTurn,
@@ -164,7 +165,14 @@ async function* runPersistent(ctx: TurnContext & { profileSessionId: string }, d
         thinking: (inPlace.thinking as QueryContext["thinking"]) ?? ctx.thinking,
         taskBudget: (inPlace.taskBudget as QueryContext["taskBudget"]) ?? ctx.taskBudget,
       }
-      return buildQueryOptions(adjustedCtx).options
+      const built = buildQueryOptions(adjustedCtx).options
+      // Persistent mode reuses one SDK query across many HTTP turns, so
+      // the per-query maxTurns ceiling (passthrough + resume = 3 today)
+      // would cap the whole lifetime of the runtime at 3 internal turns.
+      // Raise it to the non-passthrough default so the runtime can serve
+      // long multi-tool conversations; each HTTP turn's cost is still
+      // bounded by the client's usage patterns.
+      return { ...built, maxTurns: 200 }
     },
     getPassthroughSpec: () => passthroughSpec,
     buildPassthroughBinding: passthroughSpec
@@ -278,6 +286,12 @@ async function* runPersistent(ctx: TurnContext & { profileSessionId: string }, d
     // tool_result resolves the handler.
     const runtime = deps.manager.get(ctx.profileSessionId)
     if (sawToolUse && runtime && runtime.pendingCount > 0) {
+      // Mark the runtime so the NEXT HTTP turn's SSE layer knows to
+      // prepend a synthetic message_start before the SDK's mid-message
+      // continuation events (§5.12d). Only relevant for streaming turns;
+      // non-streaming turns buffer the whole response server-side so
+      // SSE framing doesn't apply.
+      if (ctx.stream) markRuntimeContinuation(runtime)
       yield makePendingPauseResult(runtime.claudeSessionId, ctx.stream)
       return
     }

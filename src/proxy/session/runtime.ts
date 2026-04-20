@@ -210,6 +210,35 @@ export function isTurnTerminator(message: SDKMessage): boolean {
   return (message as { type?: unknown }).type === TURN_TERMINATOR_EVENT
 }
 
+// --- Continuation-after-pending marker (§5.12d SSE framing) ---
+
+/**
+ * Per-runtime state set by the turn runner when it emits a `tool_use`
+ * pending-pause synthetic result and read by the server SSE layer at the
+ * start of the NEXT HTTP turn. Persistent mode splits a single SDK
+ * message across two HTTP responses (request 1 emits tool_use blocks
+ * and closes; request 2 delivers the tool_result and the SDK continues
+ * the SAME message). Without this marker, request 2's first stream
+ * events are mid-message `content_block_*` — no preceding `message_start`
+ * — and strict SSE clients (Pi) reject the sequence.
+ *
+ * The runtime doesn't interpret the flag itself; it's a side-channel
+ * that crosses the `turnRunner → server.ts SSE` boundary. Kept in a
+ * WeakMap so the `SessionRuntime` interface stays tight and the marker
+ * disappears automatically when the runtime is GC'd.
+ */
+const continuationFlags = new WeakMap<SessionRuntime, boolean>()
+
+export function markRuntimeContinuation(runtime: SessionRuntime): void {
+  continuationFlags.set(runtime, true)
+}
+
+export function consumeRuntimeContinuation(runtime: SessionRuntime): boolean {
+  const flagged = continuationFlags.get(runtime) === true
+  if (flagged) continuationFlags.delete(runtime)
+  return flagged
+}
+
 // --- Pending tool executions (passthrough deferred-handler pattern) ---
 
 /**

@@ -260,10 +260,17 @@ export async function* dispatchPersistentTurn(
     if (classification.pushContent !== null) {
       runtime.inputQueue.push(buildPushMessage(classification.pushContent))
     } else if (classification.resolve.length === 0) {
-      // Nothing to resolve AND nothing to push — push the raw content as-is.
-      // Path shouldn't normally trigger; included as a safety net.
+      // Nothing to resolve AND nothing to push — push the raw content
+      // as-is. Safety net; path shouldn't normally trigger.
       runtime.inputQueue.push(buildPushMessage(req.userContent))
     }
+    // NOTE: when classification.resolve.length > 0 && pushContent === null,
+    // we deliberately do NOT push anything. The pending-handler resolution
+    // gives the SDK the tool output; the SDK continues the in-flight
+    // assistant message. If the model's message closed at tool_use (no
+    // planned prose after), the SDK finishes the message_stop and the
+    // turn ends — client sees a tool_use response and must decide what
+    // to do. See §5.12d known-limitation note in turnRunner.ts.
 
     // --- Yield events until the turn terminator ---
     for await (const event of runtime.consumeTurn()) {

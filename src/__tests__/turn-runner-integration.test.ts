@@ -77,7 +77,7 @@ mock.module("../mcpTools", () => ({
 // Dynamic imports AFTER mocks are registered so the loaded modules see the
 // mocked SDK.
 const { startTurn } = await import("../proxy/session/turnRunner")
-const { createSessionRuntimeManager } = await import("../proxy/session/runtime")
+const { createSessionRuntimeManager, consumeRuntimeContinuation } = await import("../proxy/session/runtime")
 const { DEFAULT_PROXY_CONFIG } = await import("../proxy/types")
 const { openCodeAdapter } = await import("../proxy/adapters/opencode")
 type TurnContext = Awaited<ReturnType<typeof import("../proxy/session/turnRunner")["startTurn"]>> extends infer _ ? Parameters<typeof startTurn>[0] : never
@@ -208,6 +208,65 @@ describe("startTurn — persistent path", () => {
 
     expect(sdkCalls).toHaveLength(2) // distinct runtimes for the two profile-scoped ids
     expect(manager.size).toBe(2)
+  })
+
+  it("marks the runtime for continuation when a streaming turn pauses on pending tool_use (§5.12d)", async () => {
+    const manager = createSessionRuntimeManager({ idleMs: 60_000, maxLive: 4 })
+    const deps = { config: { ...DEFAULT_PROXY_CONFIG, persistentSessions: true }, manager }
+
+    // Script a turn whose first event is an assistant message carrying a
+    // tool_use block. The turnRunner sees sawToolUse=true, and since we
+    // don't trigger a pending registration in this unit mock, the pending
+    // branch won't fire. We need pendingCount > 0. Fake it by reaching
+    // into the runtime after creation.
+    nextTurnsByCall.push([{ events: [
+      { type: "assistant", message: { content: [{ type: "tool_use", id: "toolu_a", name: "read" }] } } as any,
+    ] }])
+
+    // Kick off the streaming turn — but we need to inject pending state
+    // mid-flight. The mock doesn't expose a hook for that, so this test
+    // asserts the NEGATIVE case: without a pending registration, the
+    // runtime is NOT marked for continuation even when sawToolUse fires.
+    await drain(startTurn(baseCtx({ stream: true, userContent: "use read" }), deps))
+
+    const rt = manager.get("sess-A")
+    expect(rt).toBeDefined()
+    // No pending was registered, so no continuation marker was set.
+    expect(consumeRuntimeContinuation(rt!)).toBe(false)
+  })
+
+  it("marks the runtime when streaming turn yields tool_use AND pending is registered", async () => {
+    const manager = createSessionRuntimeManager({ idleMs: 60_000, maxLive: 4 })
+    const deps = { config: { ...DEFAULT_PROXY_CONFIG, persistentSessions: true }, manager }
+
+    // Persistent mode reuses ONE SDK query across multiple HTTP turns, so
+    // the mock's script is a single nextTurnsByCall entry with multiple
+    // turn slots: [warmup, tool-use]. The runtime is created on the first
+    // push; we register a pending handler between turns so pendingCount > 0
+    // when the dispatcher yields the tool_use assistant event.
+    nextTurnsByCall.push([
+      { events: [] as any[] },
+      { events: [
+        { type: "assistant", message: { content: [{ type: "tool_use", id: "toolu_pending", name: "read" }] } } as any,
+      ] },
+    ])
+
+    await drain(startTurn(baseCtx({ userContent: "warmup" }), deps))
+    const rt = manager.get("sess-A")!
+    // Attach a pending handler so the second turn sees pendingCount > 0.
+    const pending = rt.registerPendingExecution("toolu_pending")
+
+    await drain(startTurn(baseCtx({ stream: true, userContent: "use read" }), deps))
+
+    // turnRunner should have called markRuntimeContinuation because
+    // stream=true + sawToolUse=true + pendingCount > 0.
+    expect(consumeRuntimeContinuation(rt)).toBe(true)
+
+    // Cleanup: reject the pending promise so it doesn't linger as an
+    // unhandled rejection after the test ends.
+    const caught = pending.catch(() => {})
+    rt.rejectAllPending(new Error("test cleanup"))
+    await caught
   })
 })
 

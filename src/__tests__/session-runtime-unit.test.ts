@@ -4,12 +4,14 @@ import type { Query, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-age
 import {
   AsyncQueueOverflowError,
   classifyPassthroughRequest,
+  consumeRuntimeContinuation,
   createAsyncQueue,
   createMutex,
   createSessionRuntime,
   createSessionRuntimeManager,
   hashReopenCriticalOptions,
   isTurnTerminator,
+  markRuntimeContinuation,
 } from "../proxy/session/runtime"
 
 describe("AsyncQueue", () => {
@@ -597,5 +599,44 @@ describe("SessionRuntimeManager", () => {
     mgr.put(r)
     await r.close()
     expect(mgr.get("a")).toBeUndefined()
+  })
+})
+
+describe("Continuation-after-pending flags (§5.12d)", () => {
+  function emptyRuntime() {
+    return createSessionRuntime({
+      profileSessionId: "p1",
+      query: (async function* () { /* empty */ })() as unknown as Query,
+      inputQueue: createAsyncQueue<SDKUserMessage>(),
+    })
+  }
+
+  it("consumeRuntimeContinuation returns false on an unflagged runtime", () => {
+    const r = emptyRuntime()
+    expect(consumeRuntimeContinuation(r)).toBe(false)
+  })
+
+  it("markRuntimeContinuation sets the flag so the next consume returns true once, then false", () => {
+    const r = emptyRuntime()
+    markRuntimeContinuation(r)
+    expect(consumeRuntimeContinuation(r)).toBe(true)
+    // second call — flag is consumed, returns false
+    expect(consumeRuntimeContinuation(r)).toBe(false)
+  })
+
+  it("two runtimes have independent flags", () => {
+    const a = emptyRuntime()
+    const b = emptyRuntime()
+    markRuntimeContinuation(a)
+    expect(consumeRuntimeContinuation(b)).toBe(false)
+    expect(consumeRuntimeContinuation(a)).toBe(true)
+  })
+
+  it("re-marking after consume resets the flag for the next request cycle", () => {
+    const r = emptyRuntime()
+    markRuntimeContinuation(r)
+    consumeRuntimeContinuation(r)
+    markRuntimeContinuation(r)
+    expect(consumeRuntimeContinuation(r)).toBe(true)
   })
 })

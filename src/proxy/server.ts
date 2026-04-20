@@ -15,7 +15,7 @@ import { randomUUID } from "crypto"
 import { withClaudeLogContext } from "../logger"
 import { createPassthroughMcpServer, stripMcpPrefix, computeToolSetKey, PASSTHROUGH_MCP_NAME, PASSTHROUGH_MCP_PREFIX } from "./passthroughTools"
 import { LRUMap } from "../utils/lruMap"
-import { createSessionRuntimeManager, type SessionRuntimeManager } from "./session/runtime"
+import { createSessionRuntimeManager, consumeRuntimeContinuation, type SessionRuntimeManager } from "./session/runtime"
 import { startTurn, type TurnContext } from "./session/turnRunner"
 import { MutexAcquireTimeoutError } from "./session/persistentDispatch"
 
@@ -1464,6 +1464,28 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
               let nextClientBlockIndex = 0
               const sdkToClientIndex = new Map<number, number>()
 
+              // §5.12d continuation-after-pending SSE framing. Persistent mode
+              // splits ONE SDK message across two HTTP responses: request 1
+              // emits tool_use blocks + closes; request 2 delivers the
+              // tool_result, the MCP handler resolves, and the SDK continues
+              // the SAME message. The continuation's first stream events are
+              // mid-message `content_block_*` with NO preceding `message_start`
+              // — Pi (and any strict SSE client) rejects that sequence.
+              //
+              // Peek the runtime's continuation marker set by turnRunner on
+              // the previous turn. If set, track that the first stream_event
+              // we see MUST be preceded by a synthetic `message_start` so the
+              // SSE stream is well-formed from the client's view.
+              const peekRuntime = effectivePersistentSessionId
+                ? runtimeManager.get(effectivePersistentSessionId)
+                : undefined
+              let needsSyntheticMessageStart = !!peekRuntime && consumeRuntimeContinuation(peekRuntime)
+              // Tracks whether we've synthesised message_start and still need
+              // to emit a content_block_start before the first content_block_*
+              // event from the SDK (which may be a mid-message delta without a
+              // preceding start).
+              let continuationPendingBlockOpen = false
+
               try {
                 for await (const message of response) {
                   if (streamClosed) {
@@ -1492,6 +1514,91 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
                     const event = message.event
                     const eventType = (event as any).type
                     const eventIndex = (event as any).index as number | undefined
+
+                    // §5.12d continuation-after-pending: if turnRunner marked
+                    // this turn as continuing an in-flight SDK message and the
+                    // first real SDK event is NOT a `message_start`, synthesise
+                    // one before forwarding anything else. Block indices reset
+                    // to 0 so the client sees a well-formed, standalone message.
+                    if (needsSyntheticMessageStart && eventType !== "message_start") {
+                      needsSyntheticMessageStart = false
+                      skipBlockIndices.clear()
+                      sdkToClientIndex.clear()
+                      nextClientBlockIndex = 0
+                      const syntheticMessageStart = {
+                        type: "message_start" as const,
+                        message: {
+                          id: `msg_persistent_cont_${randomUUID()}`,
+                          type: "message" as const,
+                          role: "assistant" as const,
+                          model,
+                          content: [] as unknown[],
+                          stop_reason: null as string | null,
+                          stop_sequence: null as string | null,
+                          usage: {
+                            input_tokens: 0,
+                            cache_creation_input_tokens: 0,
+                            cache_read_input_tokens: 0,
+                            output_tokens: 0,
+                          },
+                        },
+                      }
+                      safeEnqueue(
+                        encoder.encode(`event: message_start\ndata: ${JSON.stringify(syntheticMessageStart)}\n\n`),
+                        "persistent_continuation_message_start",
+                      )
+                      messageStartEmitted = true
+                      continuationPendingBlockOpen = true
+                      claudeLog("persistent.continuation_message_start", {
+                        mode: "stream",
+                        model,
+                        first_sdk_event: eventType,
+                      })
+                    } else if (needsSyntheticMessageStart && eventType === "message_start") {
+                      // The SDK did emit a fresh message_start on this
+                      // continuation turn — no synthesis needed.
+                      needsSyntheticMessageStart = false
+                    }
+
+                    // If we synthesised message_start, the SDK's next events
+                    // are either:
+                    //   (a) Continuation of a PREVIOUSLY-emitted tool_use
+                    //       block (input_json_delta / content_block_stop) —
+                    //       those blocks were already delivered to the client
+                    //       on the prior HTTP response, so forwarding more
+                    //       deltas for them would poison the client's view
+                    //       with a bogus "second" copy of the tool_use. Drop
+                    //       these events until the SDK emits a fresh
+                    //       content_block_start (the next NEW block) or
+                    //       message-level frame.
+                    //   (b) A fresh content_block_start for genuinely new
+                    //       content (text or additional tool_use) — forward
+                    //       normally after flipping the skip flag off.
+                    if (continuationPendingBlockOpen) {
+                      if (eventType === "content_block_start") {
+                        // Fresh block from the SDK; continuation injection
+                        // complete. Let the normal forwarding path handle it.
+                        continuationPendingBlockOpen = false
+                      } else if (eventType === "content_block_delta" || eventType === "content_block_stop") {
+                        // Dropping a tail event for a previously-emitted block.
+                        claudeLog("persistent.continuation_skip", {
+                          mode: "stream",
+                          model,
+                          dropped_event: eventType,
+                          delta_type: (event as any).delta?.type,
+                        })
+                        continue
+                      } else if (eventType === "message_delta" || eventType === "message_stop") {
+                        // Tail event from the pre-pause message envelope.
+                        // Drop so we don't stop the synthetic message early.
+                        claudeLog("persistent.continuation_skip", {
+                          mode: "stream",
+                          model,
+                          dropped_event: eventType,
+                        })
+                        continue
+                      }
+                    }
 
                     // Track MCP tool blocks (mcp__opencode__*) — these are internal tools
                     // that the SDK executes. Don't forward them to OpenCode.

@@ -249,16 +249,19 @@ describe("classifyPassthroughRequest", () => {
     expect(result.pushContent).toBeNull()
   })
 
-  it("keeps unmatched tool_result blocks in pushContent (fallback to plain push)", () => {
+  it("routes unmatched tool_result blocks to the prebind bucket (not pushContent)", () => {
+    // Parallel-tool case: client returns with both tool_results in one
+    // request but only the first handler has registered as pending. The
+    // second result must be prebound so the later-firing handler resolves
+    // from the buffer. Pushing it as a user message would deadlock the SDK.
     const content = [
       { type: "tool_result", tool_use_id: "toolu_1", content: "resolved" },
       { type: "tool_result", tool_use_id: "toolu_unknown", content: "orphaned" },
     ]
     const result = classifyPassthroughRequest(content, new Set(["toolu_1"]))
     expect(result.resolve).toEqual([{ toolUseId: "toolu_1", content: "resolved" }])
-    expect(result.pushContent).toEqual([
-      { type: "tool_result", tool_use_id: "toolu_unknown", content: "orphaned" },
-    ])
+    expect(result.prebind).toEqual([{ toolUseId: "toolu_unknown", content: "orphaned" }])
+    expect(result.pushContent).toBeNull()
   })
 
   it("preserves non-tool_result blocks (text, images) in pushContent", () => {
@@ -318,11 +321,12 @@ describe("classifyPassthroughRequest", () => {
     expect(fromUndef.pushContent).toBeNull()
   })
 
-  it("returns empty resolve when pending set is empty", () => {
+  it("routes tool_result blocks to prebind when pending set is empty", () => {
     const content = [{ type: "tool_result", tool_use_id: "toolu_1", content: "x" }]
     const result = classifyPassthroughRequest(content, new Set())
     expect(result.resolve).toEqual([])
-    expect(result.pushContent).toEqual(content)
+    expect(result.prebind).toEqual([{ toolUseId: "toolu_1", content: "x" }])
+    expect(result.pushContent).toBeNull()
   })
 })
 
@@ -431,6 +435,74 @@ describe("SessionRuntime — pending executions", () => {
     // cleanup: resolve so the dangling promise doesn't warn on test exit
     runtime.resolvePendingExecution("toolu_abc", "x")
     await pending
+  })
+})
+
+describe("SessionRuntime — prebound tool_result buffer", () => {
+  function emptyRuntime() {
+    return createSessionRuntime({
+      profileSessionId: "p1",
+      query: (async function* () { /* empty */ })() as unknown as Query,
+      inputQueue: createAsyncQueue<SDKUserMessage>(),
+    })
+  }
+
+  it("prebindPendingResult followed by registerPendingExecution resolves synchronously from the buffer", async () => {
+    const runtime = emptyRuntime()
+    runtime.prebindPendingResult("toolu_B", "payload-B")
+    expect(runtime.prebindCount).toBe(1)
+
+    const result = runtime.registerPendingExecution("toolu_B")
+    // The handler must never enter the pending registry — it drains the
+    // buffer synchronously.
+    expect(runtime.pendingCount).toBe(0)
+    expect(runtime.prebindCount).toBe(0)
+    expect(await result).toBe("payload-B")
+  })
+
+  it("prebindPendingResult resolves an already-registered handler immediately (reverse-order race)", async () => {
+    const runtime = emptyRuntime()
+    const pending = runtime.registerPendingExecution("toolu_A")
+    expect(runtime.pendingCount).toBe(1)
+    runtime.prebindPendingResult("toolu_A", "payload-A")
+    expect(await pending).toBe("payload-A")
+    expect(runtime.pendingCount).toBe(0)
+    expect(runtime.prebindCount).toBe(0)
+  })
+
+  it("close() clears the prebound buffer", async () => {
+    const runtime = emptyRuntime()
+    runtime.prebindPendingResult("toolu_X", "gone")
+    expect(runtime.prebindCount).toBe(1)
+    await runtime.close()
+    expect(runtime.prebindCount).toBe(0)
+  })
+
+  it("prebindPendingResult on a closed runtime is a no-op (does not throw)", async () => {
+    const runtime = emptyRuntime()
+    await runtime.close()
+    runtime.prebindPendingResult("toolu_X", "gone")
+    expect(runtime.prebindCount).toBe(0)
+  })
+
+  it("supports the parallel-tool flow end-to-end (resolve first, prebind second)", async () => {
+    // Mirrors the real E/F shape: when turn-2's batched tool_results arrive,
+    // the first handler is already pending, the second hasn't fired yet.
+    const runtime = emptyRuntime()
+    const pendingA = runtime.registerPendingExecution("toolu_A")
+
+    // Client returns both tool_results in one batch — meridian classifies
+    // and resolves A immediately, prebinds B.
+    const resolvedA = runtime.resolvePendingExecution("toolu_A", "alpha")
+    runtime.prebindPendingResult("toolu_B", "beta")
+    expect(resolvedA).toBe(true)
+    expect(await pendingA).toBe("alpha")
+
+    // The SDK later fires handler B; it drains the buffer synchronously.
+    const pendingB = runtime.registerPendingExecution("toolu_B")
+    expect(await pendingB).toBe("beta")
+    expect(runtime.pendingCount).toBe(0)
+    expect(runtime.prebindCount).toBe(0)
   })
 })
 

@@ -255,15 +255,19 @@ export interface PendingExecution {
 }
 
 /**
- * Partition of incoming user-message content blocks into two groups:
- * `resolve` — `tool_result` blocks whose `tool_use_id` matches an existing
- * pending execution (to be resolved, NOT pushed as input); `pushContent` —
- * the remainder (to be pushed as an `SDKUserMessage`). Mixed messages keep
- * their non-tool_result blocks in `pushContent` so text or images still
- * reach the SDK.
+ * Partition of incoming user-message content blocks into three groups:
+ * `resolve` — `tool_result` blocks whose `tool_use_id` matches a currently
+ * pending execution (to be resolved immediately);
+ * `prebind` — `tool_result` blocks whose `tool_use_id` does NOT match any
+ * currently pending execution (the matching MCP handler hasn't fired yet
+ * because the SDK fires handlers sequentially; its content is buffered so
+ * the handler resolves from the buffer when it later registers);
+ * `pushContent` — everything else (text, images, non-tool_result blocks)
+ * gets pushed as a user message so it still reaches the SDK.
  */
 export interface PassthroughClassification {
   resolve: Array<{ toolUseId: string; content: string }>
+  prebind: Array<{ toolUseId: string; content: string }>
   pushContent: unknown[] | null
 }
 
@@ -282,10 +286,17 @@ function extractToolResultText(content: unknown): string {
 }
 
 /**
- * Partition a user-message content array. Blocks of `type: "tool_result"` whose
- * `tool_use_id` is in `pendingToolUseIds` are diverted to the `resolve` list;
- * everything else stays in `pushContent`. If `pushContent` would be an empty
- * array (all blocks diverted), it becomes `null` to signal "no push needed".
+ * Partition a user-message content array. Blocks of `type: "tool_result"`
+ * are diverted away from `pushContent`: if `tool_use_id` is already in
+ * `pendingToolUseIds` the block goes to `resolve` (to unblock the MCP
+ * handler immediately); otherwise it goes to `prebind` (the MCP handler
+ * for that `tool_use_id` hasn't fired yet — the SDK fires handlers
+ * sequentially, so for parallel tool_use blocks in one assistant message
+ * only the first handler is pending when the client's batched tool_results
+ * arrive). The caller writes `prebind` entries into the runtime's prebound
+ * buffer so the later handler's `registerPendingExecution` call resolves
+ * from the buffer. Everything else stays in `pushContent`. If `pushContent`
+ * would be an empty array (all blocks diverted), it becomes `null`.
  */
 export function classifyPassthroughRequest(
   content: unknown,
@@ -297,23 +308,27 @@ export function classifyPassthroughRequest(
     // survives. No `tool_result` matching happens here because `tool_result`
     // correlation requires the canonical content-block array shape.
     if (content === undefined || content === null) {
-      return { resolve: [], pushContent: null }
+      return { resolve: [], prebind: [], pushContent: null }
     }
-    return { resolve: [], pushContent: [content] }
+    return { resolve: [], prebind: [], pushContent: [content] }
   }
   const resolve: Array<{ toolUseId: string; content: string }> = []
+  const prebind: Array<{ toolUseId: string; content: string }> = []
   const remainder: unknown[] = []
   for (const block of content) {
     if (!block || typeof block !== "object") { remainder.push(block); continue }
     const b = block as { type?: unknown; tool_use_id?: unknown; content?: unknown }
-    if (b.type === "tool_result" && typeof b.tool_use_id === "string" && pendingToolUseIds.has(b.tool_use_id)) {
-      resolve.push({ toolUseId: b.tool_use_id, content: extractToolResultText(b.content) })
+    if (b.type === "tool_result" && typeof b.tool_use_id === "string") {
+      const entry = { toolUseId: b.tool_use_id, content: extractToolResultText(b.content) }
+      if (pendingToolUseIds.has(b.tool_use_id)) resolve.push(entry)
+      else prebind.push(entry)
       continue
     }
     remainder.push(block)
   }
   return {
     resolve,
+    prebind,
     pushContent: remainder.length === 0 ? null : remainder,
   }
 }
@@ -375,10 +390,23 @@ export interface SessionRuntime {
   rejectPendingExecution(toolUseId: string, err: unknown): boolean
   /** Reject every currently-pending entry — used by shutdown / eviction. */
   rejectAllPending(err: unknown): number
+  /**
+   * Buffer `tool_result` content for a `tool_use_id` whose MCP handler has
+   * not yet called `registerPendingExecution`. When the handler later
+   * registers, the buffered content satisfies its promise immediately.
+   *
+   * This covers parallel `tool_use` blocks in one assistant message: the
+   * SDK fires MCP handlers sequentially, so when the client returns with
+   * all tool_results in one request, only the first handler is pending.
+   * The rest must be buffered until their handlers fire.
+   */
+  prebindPendingResult(toolUseId: string, content: string): void
   /** Read-only snapshot of pending tool_use_ids; used by request classifier. */
   readonly pendingToolUseIds: ReadonlySet<string>
   /** How many pending handlers are currently awaiting. */
   readonly pendingCount: number
+  /** How many prebound tool_result entries are currently buffered. */
+  readonly prebindCount: number
 
   /**
    * PreToolUse → MCP handler coordination FIFO.
@@ -415,6 +443,11 @@ export function createSessionRuntime(init: SessionRuntimeInit): SessionRuntime {
   const pendingTimeoutMs = init.pendingExecutionTimeoutMs ?? Infinity
   // Per-tool-name FIFO of captured tool_use_ids (PreToolUse → MCP handler).
   const toolUseIdFifo = new Map<string, string[]>()
+  // Prebound tool_result content keyed by tool_use_id. Populated when the
+  // client returns a tool_result before the MCP handler for that
+  // tool_use_id has fired (parallel tool_use blocks — SDK fires handlers
+  // sequentially). Drained by registerPendingExecution on later registration.
+  const prebound = new Map<string, string>()
 
   const runtime: SessionRuntime = {
     profileSessionId: init.profileSessionId,
@@ -460,6 +493,9 @@ export function createSessionRuntime(init: SessionRuntimeInit): SessionRuntime {
         try { entry.reject(new Error("SessionRuntime closed")) } catch { /* ignore */ }
       }
       pending.clear()
+      // Drop any buffered prebound content — the handlers that would have
+      // drained it will never run on a closed runtime.
+      prebound.clear()
       // Clear outstanding idle timers (§5.12f) so they don't fire post-close.
       for (const [, h] of pendingTimeouts) clearTimeout(h)
       pendingTimeouts.clear()
@@ -470,6 +506,14 @@ export function createSessionRuntime(init: SessionRuntimeInit): SessionRuntime {
     async registerPendingExecution(toolUseId: string): Promise<string> {
       if (closed) {
         throw new Error(`SessionRuntime ${init.profileSessionId} is closed`)
+      }
+      // Fast path: the client's tool_result arrived before this handler
+      // fired (parallel tool_use in one assistant message). Serve from the
+      // prebound buffer and skip the pending registry entirely.
+      const buffered = prebound.get(toolUseId)
+      if (buffered !== undefined) {
+        prebound.delete(toolUseId)
+        return buffered
       }
       return await new Promise<string>((resolve, reject) => {
         const clearIdleTimer = () => {
@@ -507,6 +551,19 @@ export function createSessionRuntime(init: SessionRuntimeInit): SessionRuntime {
       })
     },
 
+    prebindPendingResult(toolUseId: string, content: string): void {
+      if (closed) return
+      // If a handler is already pending (rare but possible if classification
+      // picked this id up as prebind while a race concurrently registered),
+      // resolve it directly instead of buffering.
+      const entry = pending.get(toolUseId)
+      if (entry) {
+        entry.resolve(content)
+        return
+      }
+      prebound.set(toolUseId, content)
+    },
+
     resolvePendingExecution(toolUseId: string, content: string): boolean {
       const entry = pending.get(toolUseId)
       if (!entry) return false
@@ -539,6 +596,10 @@ export function createSessionRuntime(init: SessionRuntimeInit): SessionRuntime {
 
     get pendingCount(): number {
       return pending.size
+    },
+
+    get prebindCount(): number {
+      return prebound.size
     },
 
     enqueueToolUseId(toolName: string, toolUseId: string): void {

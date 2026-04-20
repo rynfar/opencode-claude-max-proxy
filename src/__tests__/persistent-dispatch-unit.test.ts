@@ -371,4 +371,51 @@ describe("dispatchPersistentTurn — pending-handler integration (§5.12h/i/l)",
     expect(err).toBeInstanceOf(Error)
     expect((err as Error).message).toMatch(/closed/)
   })
+
+  it("prebinds unmatched tool_results so a later-firing handler resolves from the buffer (parallel-tool E/F path)", async () => {
+    // Reproduces the Layer-2 race validated in spike/e-f-repro.ts: the model
+    // emits two tool_use blocks in one assistant message; only the first
+    // handler is pending when the client returns with both tool_results.
+    // The dispatcher must prebind the second tool_result so the later
+    // handler resolves from the buffer instead of deadlocking the SDK.
+    const h = makeHarness()
+    // Turn 1 just starts the runtime; no events emitted.
+    h.nextTurns.push([{ events: [{ type: "assistant" } as unknown as SDKMessage] }])
+    // Turn 2 has an assistant event then result — the runtime is alive and
+    // we drive the prebind/resolve step directly below.
+    h.nextTurns.push([{ events: [{ type: "assistant" } as unknown as SDKMessage] }])
+
+    for await (const _ of dispatchPersistentTurn(makeRequest({ userContent: "t1" }), h)) { /* drain */ }
+
+    const runtime = h.runtimes[0]!
+    const pendingA = runtime.registerPendingExecution("toolu_A")
+    const caughtA = pendingA.catch((e) => e)
+    expect(runtime.pendingCount).toBe(1)
+
+    const { classifyPassthroughRequest } = await import("../proxy/session/runtime")
+    const { resolvePendingFromRequest, prebindFromRequest } = await import("../proxy/session/persistentDispatch")
+
+    const classification = classifyPassthroughRequest([
+      { type: "tool_result", tool_use_id: "toolu_A", content: "alpha" },
+      { type: "tool_result", tool_use_id: "toolu_B", content: "beta" },
+    ], runtime.pendingToolUseIds)
+
+    expect(classification.resolve).toEqual([{ toolUseId: "toolu_A", content: "alpha" }])
+    expect(classification.prebind).toEqual([{ toolUseId: "toolu_B", content: "beta" }])
+    expect(classification.pushContent).toBeNull()
+
+    const resolved = resolvePendingFromRequest(runtime, classification.resolve)
+    const buffered = prebindFromRequest(runtime, classification.prebind)
+    expect(resolved).toBe(1)
+    expect(buffered).toBe(1)
+    expect(runtime.prebindCount).toBe(1)
+    expect(await pendingA).toBe("alpha")
+
+    // The SDK later fires handler B: it drains the buffer synchronously.
+    const pendingB = runtime.registerPendingExecution("toolu_B")
+    expect(await pendingB).toBe("beta")
+    expect(runtime.pendingCount).toBe(0)
+    expect(runtime.prebindCount).toBe(0)
+    expect(await caughtA).toBe("alpha")
+  })
 })

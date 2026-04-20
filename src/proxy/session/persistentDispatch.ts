@@ -160,6 +160,24 @@ export function resolvePendingFromRequest(
 }
 
 /**
+ * Buffer every `tool_result` block in `prebindList` into the runtime's
+ * prebound-result buffer. The matching MCP handler hasn't fired yet — when
+ * it registers via `registerPendingExecution`, it will drain the buffer
+ * and resolve immediately. Returns the number of entries buffered.
+ */
+export function prebindFromRequest(
+  runtime: SessionRuntime,
+  prebindList: Array<{ toolUseId: string; content: string }>,
+): number {
+  let buffered = 0
+  for (const p of prebindList) {
+    runtime.prebindPendingResult(p.toolUseId, p.content)
+    buffered++
+  }
+  return buffered
+}
+
+/**
  * Build the `SDKUserMessage` to push into the runtime's input queue.
  * Strips cache_control per §D10, honors plain-string content, and wraps
  * single-image/tool_result blocks into a content array.
@@ -256,21 +274,27 @@ export async function* dispatchPersistentTurn(
     if (classification.resolve.length > 0) {
       resolvePendingFromRequest(runtime, classification.resolve)
     }
+    if (classification.prebind.length > 0) {
+      prebindFromRequest(runtime, classification.prebind)
+    }
 
     if (classification.pushContent !== null) {
       runtime.inputQueue.push(buildPushMessage(classification.pushContent))
-    } else if (classification.resolve.length === 0) {
-      // Nothing to resolve AND nothing to push — push the raw content
+    } else if (classification.resolve.length === 0 && classification.prebind.length === 0) {
+      // Nothing to resolve, prebind, or push — push the raw content
       // as-is. Safety net; path shouldn't normally trigger.
       runtime.inputQueue.push(buildPushMessage(req.userContent))
     }
-    // NOTE: when classification.resolve.length > 0 && pushContent === null,
-    // we deliberately do NOT push anything. The pending-handler resolution
-    // gives the SDK the tool output; the SDK continues the in-flight
-    // assistant message. If the model's message closed at tool_use (no
-    // planned prose after), the SDK finishes the message_stop and the
-    // turn ends — client sees a tool_use response and must decide what
-    // to do. See §5.12d known-limitation note in turnRunner.ts.
+    // NOTE: when only resolves/prebinds fired (pushContent === null), we
+    // deliberately do NOT push anything. The pending-handler resolutions +
+    // prebound buffer cover every incoming tool_result: the first handler
+    // unblocks from `resolve`; later-firing handlers (parallel tool_use in
+    // one assistant message fire sequentially under the SDK) drain their
+    // content from the prebound buffer when they call
+    // `registerPendingExecution`. Pushing a user message with orphaned
+    // tool_results would deadlock the SDK — it stays blocked in the MCP
+    // handler chain and never consumes the queue (validated in
+    // spike/e-f-repro.ts).
 
     // --- Yield events until the turn terminator ---
     for await (const event of runtime.consumeTurn()) {

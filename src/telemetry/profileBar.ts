@@ -19,29 +19,34 @@
  */
 export const themeCss = `
   :root {
-    /* Core surfaces */
-    --bg:        #0f0b1a;
-    --surface:   #1a1030;
-    --surface2:  #221840;
-    --border:    #2d2545;
-    /* Text */
-    --text:      #e0e7ff;
-    --muted:     #8b8aa0;
+    /* Core surfaces — lifted slightly from the original purple palette so
+       cards separate from the background and borders are visible. The
+       original #0f0b1a bg read "muddy" because the purple tint lowered
+       perceived contrast; this version keeps the brand color on accents
+       while letting the neutral surfaces do the heavy lifting. */
+    --bg:        #12102a;
+    --surface:   #1f1a3e;
+    --surface2:  #2a2450;
+    --border:    #3a3260;
+    /* Text — lifted to near-white. Muted was a purple-leaning gray (~4.8:1)
+       that failed small-text WCAG AAA; the new #b3a9c7 lands near ~7:1. */
+    --text:      #f1ecff;
+    --muted:     #b3a9c7;
     /* Brand */
-    --accent:    #8b5cf6;
-    --accent2:   #6366f1;
-    --violet:    #a78bfa;
-    --lavender:  #c4b5fd;
+    --accent:    #a78bfa;
+    --accent2:   #818cf8;
+    --violet:    #c4b5fd;
+    --lavender:  #ddd6fe;
     /* Semantic */
-    --green:     #3fb950;
-    --yellow:    #d29922;
-    --red:       #f85149;
+    --green:     #4ade80;
+    --yellow:    #facc15;
+    --red:       #f87171;
     /* Telemetry-specific aliases (waterfall + lineage badges) */
-    --blue:      #6366f1;
-    --purple:    #a78bfa;
-    --queue:     #d29922;
-    --ttfb:      #6366f1;
-    --upstream:  #8b5cf6;
+    --blue:      #818cf8;
+    --purple:    #c4b5fd;
+    --queue:     #facc15;
+    --ttfb:      #818cf8;
+    --upstream:  #a78bfa;
   }
 `
 

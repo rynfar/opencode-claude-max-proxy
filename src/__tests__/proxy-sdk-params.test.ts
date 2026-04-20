@@ -166,6 +166,12 @@ describe("SDK param passthrough — header overrides", () => {
     ])
   })
 
+  it("advisor-tool anthropic-beta header is forwarded for claude-max profiles", async () => {
+    const app = createTestApp()
+    await post(app, BASE_BODY, { "anthropic-beta": "advisor-tool-2026-03-01" })
+    expect(capturedOptions.betas).toEqual(["advisor-tool-2026-03-01"])
+  })
+
   it("billable anthropic-beta (extended-cache-ttl) IS stripped for claude-max", async () => {
     const app = createTestApp()
     await post(app, BASE_BODY, { "anthropic-beta": "extended-cache-ttl-2025-04-11" })

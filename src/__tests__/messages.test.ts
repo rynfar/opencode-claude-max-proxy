@@ -2,7 +2,7 @@
  * Unit tests for message parsing utilities.
  */
 import { describe, it, expect } from "bun:test"
-import { normalizeContent, getLastUserMessage } from "../proxy/messages"
+import { extractAdvisorToolDefinition, getLastUserMessage, normalizeContent, summarizeContentBlockForPrompt } from "../proxy/messages"
 
 describe("normalizeContent", () => {
   it("returns string content as-is", () => {
@@ -32,6 +32,19 @@ describe("normalizeContent", () => {
     const result = normalizeContent(content)
     expect(result).toContain("tool_result:tu_1:")
     expect(result).toContain('"key":"val"')
+  })
+
+  it("handles server_tool_use blocks", () => {
+    const content = [{ type: "server_tool_use", id: "srv_1", name: "advisor", input: {} }]
+    const result = normalizeContent(content)
+    expect(result).toBe("server_tool_use:srv_1:advisor:{}")
+  })
+
+  it("handles advisor_tool_result blocks", () => {
+    const content = [{ type: "advisor_tool_result", content: [{ type: "advisor_result", text: "Plan first." }] }]
+    const result = normalizeContent(content)
+    expect(result).toContain("advisor_tool_result:")
+    expect(result).toContain("advisor_result")
   })
 
   it("handles mixed content blocks", () => {
@@ -71,6 +84,43 @@ describe("normalizeContent", () => {
     expect(normalizeContent(42)).toBe("42")
     expect(normalizeContent(null)).toBe("null")
     expect(normalizeContent(true)).toBe("true")
+  })
+})
+
+describe("summarizeContentBlockForPrompt", () => {
+  it("summarizes server tool use blocks", () => {
+    expect(
+      summarizeContentBlockForPrompt({ type: "server_tool_use", name: "advisor", input: {} })
+    ).toBe("[Server Tool Use: advisor({})]")
+  })
+
+  it("summarizes advisor tool results", () => {
+    expect(
+      summarizeContentBlockForPrompt({ type: "advisor_tool_result", content: [{ type: "advisor_result", text: "Think bigger" }] })
+    ).toContain("Advisor Tool Result")
+  })
+})
+
+describe("extractAdvisorToolDefinition", () => {
+  it("extracts a valid advisor tool definition", () => {
+    expect(extractAdvisorToolDefinition([
+      { type: "advisor_20260301", name: "advisor", model: "claude-opus-4-7", max_uses: 2 },
+    ])).toEqual({
+      type: "advisor_20260301",
+      name: "advisor",
+      model: "claude-opus-4-7",
+      max_uses: 2,
+    })
+  })
+
+  it("returns undefined when no advisor tool is present", () => {
+    expect(extractAdvisorToolDefinition([{ name: "Read" }])).toBeUndefined()
+  })
+
+  it("rejects malformed advisor tool definitions", () => {
+    expect(() => extractAdvisorToolDefinition([
+      { type: "advisor_20260301", name: "not-advisor", model: "claude-opus-4-7" },
+    ])).toThrow("Advisor tool must be named 'advisor'")
   })
 })
 

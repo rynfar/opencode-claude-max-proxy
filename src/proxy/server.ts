@@ -23,7 +23,7 @@ import { refreshOAuthToken } from "./tokenRefresh"
 import { checkPluginConfigured } from "./setup"
 import { mapModelToClaudeModel, resolveClaudeExecutableAsync, isClosedControllerError, getClaudeAuthStatusAsync, getAuthCacheInfo, hasExtendedContext, stripExtendedContext, recordExtendedContextUnavailable } from "./models"
 import { translateOpenAiToAnthropic, translateAnthropicToOpenAi, translateAnthropicSseEvent, buildModelList } from "./openai"
-import { getLastUserMessage } from "./messages"
+import { extractAdvisorToolDefinition, getLastUserMessage, summarizeContentBlockForPrompt } from "./messages"
 import { requireAuth, authEnabled } from "./auth"
 import { detectAdapter } from "./adapters/detect"
 import { buildQueryOptions, type QueryContext } from "./query"
@@ -124,7 +124,14 @@ function flattenAssistantContent(content: any): string {
   if (typeof content === "string") return content
   if (!Array.isArray(content)) return String(content ?? "")
   return content
-    .map((b: any) => (b?.type === "text" && b.text ? b.text : ""))
+    .map((b: any) => {
+      if (b?.type === "text" && b.text) return b.text
+      if (b?.type === "tool_use") return ""
+      if (b?.type === "server_tool_use" || b?.type === "advisor_tool_result") {
+        return summarizeContentBlockForPrompt(b)
+      }
+      return ""
+    })
     .filter(Boolean)
     .join("\n")
 }
@@ -360,6 +367,20 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
           return c.json(
             { type: "error", error: { type: "invalid_request_error", message: "messages: Field required" } },
             400
+          )
+        }
+
+        const advisorTool = extractAdvisorToolDefinition(body.tools)
+        if (advisorTool) {
+          return c.json(
+            {
+              type: "error",
+              error: {
+                type: "invalid_request_error",
+                message: "Anthropic advisor tool requests are not supported by Meridian's current Claude Agent SDK path yet.",
+              },
+            },
+            400,
           )
         }
 
@@ -789,6 +810,7 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
           const upstreamStartAt = Date.now()
           let firstChunkAt: number | undefined
           let currentSessionId: string | undefined
+          let lastStopReason: string | undefined
 
           // Build SDK UUID map: start with previously stored UUIDs (if resuming),
           // then capture new ones from the response. Declared outside try so
@@ -1015,6 +1037,9 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
                 // Capture token usage from the assistant message
                 const msgUsage = message.message.usage as TokenUsage | undefined
                 if (msgUsage) lastUsage = { ...lastUsage, ...msgUsage }
+                if (typeof message.message.stop_reason === "string") {
+                  lastStopReason = message.message.stop_reason
+                }
               }
             }
 
@@ -1067,7 +1092,7 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
 
           // Determine stop_reason based on content: tool_use if any tool blocks, else end_turn
           const hasToolUse = contentBlocks.some((b) => b.type === "tool_use")
-          const stopReason = hasToolUse ? "tool_use" : "end_turn"
+          const stopReason = lastStopReason ?? (hasToolUse ? "tool_use" : "end_turn")
 
           // Append file change summary:
           // - Internal mode: fileChanges populated by PostToolUse hook
@@ -2052,6 +2077,18 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
   // See src/proxy/openai.ts for the translation logic and design rationale.
   app.post("/v1/chat/completions", async (c) => {
     const rawBody = await c.req.json() as Record<string, unknown>
+    if (extractAdvisorToolDefinition(rawBody.tools)) {
+      return c.json(
+        {
+          type: "error",
+          error: {
+            type: "invalid_request_error",
+            message: "Anthropic advisor tool requests are not supported on Meridian's OpenAI-compatible route.",
+          },
+        },
+        400,
+      )
+    }
     const anthropicBody = translateOpenAiToAnthropic(rawBody)
 
     if (!anthropicBody) {

@@ -4,7 +4,7 @@
  * Fetches /plugins/list client-side for live data; supports reload via POST /plugins/reload.
  */
 
-import { profileBarCss, profileBarHtml, profileBarJs } from "../../telemetry/profileBar"
+import { profileBarCss, profileBarHtml, profileBarJs, themeCss } from "../../telemetry/profileBar"
 
 export const pluginPageHtml = `<!DOCTYPE html>
 <html lang="en">
@@ -13,11 +13,7 @@ export const pluginPageHtml = `<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Meridian \u2014 Plugins</title>
 <style>
-  :root {
-    --bg: #0f0b1a; --surface: #1a1030; --surface2: #221840; --border: #2d2545;
-    --text: #e0e7ff; --muted: #8b8aa0; --accent: #8b5cf6; --accent2: #6366f1;
-    --green: #3fb950; --yellow: #d29922; --red: #f85149;
-  }
+  ${themeCss}
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
          background: var(--bg); color: var(--text); line-height: 1.6; min-height: 100vh; }

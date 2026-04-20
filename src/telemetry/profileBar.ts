@@ -6,6 +6,45 @@
  * POST /profiles/active — no page reload needed.
  */
 
+/**
+ * Canonical Meridian theme — purple brand palette.
+ *
+ * Every inline HTML page (landing, telemetry dashboard, profiles,
+ * settings, plugins) prepends this block before its own styles so
+ * `var(--bg)`, `var(--accent)` etc. resolve consistently everywhere.
+ *
+ * Extra variables (--queue, --ttfb, --upstream, --blue, --purple) exist
+ * so the telemetry waterfall and lineage-colored badges keep their
+ * semantic meaning without needing per-page overrides.
+ */
+export const themeCss = `
+  :root {
+    /* Core surfaces */
+    --bg:        #0f0b1a;
+    --surface:   #1a1030;
+    --surface2:  #221840;
+    --border:    #2d2545;
+    /* Text */
+    --text:      #e0e7ff;
+    --muted:     #8b8aa0;
+    /* Brand */
+    --accent:    #8b5cf6;
+    --accent2:   #6366f1;
+    --violet:    #a78bfa;
+    --lavender:  #c4b5fd;
+    /* Semantic */
+    --green:     #3fb950;
+    --yellow:    #d29922;
+    --red:       #f85149;
+    /* Telemetry-specific aliases (waterfall + lineage badges) */
+    --blue:      #6366f1;
+    --purple:    #a78bfa;
+    --queue:     #d29922;
+    --ttfb:      #6366f1;
+    --upstream:  #8b5cf6;
+  }
+`
+
 export const profileBarCss = `
   .meridian-profile-bar {
     position: sticky; top: 0; z-index: 100;

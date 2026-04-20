@@ -3,7 +3,7 @@
  * Shows all configured profiles, their auth status, and setup instructions.
  */
 
-import { profileBarCss, profileBarHtml, profileBarJs } from "./profileBar"
+import { profileBarCss, profileBarHtml, profileBarJs, themeCss } from "./profileBar"
 
 export const profilePageHtml = `<!DOCTYPE html>
 <html lang="en">
@@ -12,12 +12,7 @@ export const profilePageHtml = `<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Meridian — Profiles</title>
 <style>
-  :root {
-    --bg: #0d1117; --surface: #161b22; --border: #30363d;
-    --text: #e6edf3; --muted: #8b949e; --accent: #58a6ff;
-    --green: #3fb950; --yellow: #d29922; --red: #f85149;
-    --purple: #bc8cff;
-  }
+  ${themeCss}
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
          background: var(--bg); color: var(--text); padding: 0; line-height: 1.5; }

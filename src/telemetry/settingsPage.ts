@@ -3,7 +3,7 @@
  * Same dark theme as the telemetry dashboard. No framework, no CDN.
  */
 
-import { profileBarCss, profileBarHtml, profileBarJs } from "./profileBar"
+import { profileBarCss, profileBarHtml, profileBarJs, themeCss } from "./profileBar"
 
 export const settingsPageHtml = `<!DOCTYPE html>
 <html lang="en">
@@ -13,12 +13,7 @@ export const settingsPageHtml = `<!DOCTYPE html>
 <title>Meridian — SDK Features</title>
 <link rel="icon" type="image/svg+xml" href="/telemetry/icon.svg">
 <style>
-  :root {
-    --bg: #0d1117; --surface: #161b22; --border: #30363d;
-    --text: #e6edf3; --muted: #8b949e; --accent: #58a6ff;
-    --green: #3fb950; --yellow: #d29922; --red: #f85149;
-    --purple: #bc8cff;
-  }
+  ${themeCss}
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
          background: var(--bg); color: var(--text); padding: 0; line-height: 1.5; }

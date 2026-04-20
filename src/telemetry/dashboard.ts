@@ -3,7 +3,7 @@
  * No framework, no build step, no CDN. Single self-contained page.
  */
 
-import { profileBarCss, profileBarHtml, profileBarJs } from "./profileBar"
+import { profileBarCss, profileBarHtml, profileBarJs, themeCss } from "./profileBar"
 
 export const dashboardHtml = `<!DOCTYPE html>
 <html lang="en">
@@ -13,13 +13,8 @@ export const dashboardHtml = `<!DOCTYPE html>
 <title>Meridian — Telemetry</title>
 <link rel="icon" type="image/svg+xml" href="/telemetry/icon.svg">
 <style>
-  :root {
-    --bg: #0d1117; --surface: #161b22; --border: #30363d;
-    --text: #e6edf3; --muted: #8b949e; --accent: #58a6ff;
-    --green: #3fb950; --yellow: #d29922; --red: #f85149;
-    --blue: #58a6ff; --purple: #bc8cff;
-    --queue: #d29922; --ttfb: #58a6ff; --upstream: #3fb950; --total: #bc8cff;
-  }
+  ${themeCss}
+  :root { --total: var(--accent); }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
          background: var(--bg); color: var(--text); padding: 0; line-height: 1.5; }

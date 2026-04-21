@@ -26,7 +26,7 @@ import { refreshOAuthToken } from "./tokenRefresh"
 import { checkPluginConfigured } from "./setup"
 import { mapModelToClaudeModel, resolveClaudeExecutableAsync, isClosedControllerError, getClaudeAuthStatusAsync, getAuthCacheInfo, hasExtendedContext, stripExtendedContext, recordExtendedContextUnavailable } from "./models"
 import { translateOpenAiToAnthropic, translateAnthropicToOpenAi, translateAnthropicSseEvent, buildModelList } from "./openai"
-import { getLastUserMessage } from "./messages"
+import { getLastUserMessage, extractTrailingUserContent } from "./messages"
 import { requireAuth, authEnabled } from "./auth"
 import { detectAdapter } from "./adapters/detect"
 import { buildQueryOptions, type QueryContext } from "./query"
@@ -812,8 +812,14 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
         // `config.persistentSessions === false` — startTurn will take the
         // legacy `query(...)` path and yield the same events. Extracting
         // them up here so all 4 query-call sites share them.
-        const lastUserMsgForPersistent = [...(body.messages || [])].reverse().find((m: any) => m.role === "user") as { content?: unknown } | undefined
-        const persistentUserContent = lastUserMsgForPersistent?.content
+        // Aggregate ALL trailing consecutive `role === "user"` messages so
+        // tool_results and a trailing steer text (pi's steeringQueue flushes
+        // before the next LLM call as a separate user agent-message — see
+        // `@mariozechner/pi-agent-core/agent-loop.js:92-100`) both reach
+        // `classifyPassthroughRequest`. Grabbing only the single last user
+        // message stranded tool_results whenever a steer was pending and
+        // hung the SDK on blocked deferred handlers.
+        const persistentUserContent = extractTrailingUserContent(body.messages || [])
         const persistentPassthroughSpec = passthrough && requestTools.length > 0
           ? { tools: requestTools as never[], coreToolNames: adapter.getCoreToolNames?.() }
           : null

@@ -245,19 +245,24 @@ async function* runPersistent(ctx: TurnContext & { profileSessionId: string }, d
   let firstSessionIdSeen = false
   let sawToolUse = false
 
-  // NOTE: §5.12d continuation-after-pending SSE framing for multi-tool
-  // parallel passthrough in streaming mode is a KNOWN LIMITATION. When
-  // the SDK's MCP handler unblocks on the tool_result return, it resumes
-  // emitting stream events for the SAME in-flight assistant message
-  // (content_block_* with no preceding fresh message_start). Pi (and
-  // likely other clients) rejects the resulting SSE stream. Single-tool
-  // scenarios work because the SDK happens to re-open message framing;
-  // parallel-tool scenarios do not. Fix requires either (a) a synthetic
-  // message_start injection with exact-matching message_id + model that
-  // Pi accepts, or (b) a server.ts SSE layer rewrite that re-synthesises
-  // the continuation as a standalone message. Both are out of scope for
-  // this change and tracked as follow-up. Non-streaming + non-passthrough
-  // + single-tool-streaming passthrough paths are all unaffected.
+  // §5.12d continuation-after-pending SSE framing. For multi-tool-parallel
+  // passthrough messages, the SDK emits ONE `assistant` rebuild event per
+  // tool_use block (not one per message), and the MCP handler for the
+  // first tool fires between the first tool's `content_block_stop` and
+  // the second tool's `content_block_start` — several hundred ms *before*
+  // the message finishes streaming. If the early-exit were keyed on
+  // `assistant`+pendingCount, it would fire mid-message, leaving the
+  // second tool_use's content_block_* events un-yielded and producing a
+  // partial tool_use block on the client (the "Validation failed: must
+  // have required property 'command'" cascade observed in scenario O).
+  //
+  // Gate the early-exit on the `message_stop` stream_event instead. By
+  // the time message_stop lands, ALL content blocks for every tool_use
+  // in the message have streamed out, regardless of whether their MCP
+  // handlers have registered + blocked. Then we check pendingCount to
+  // decide whether to pause (handlers blocked → client must execute
+  // tools and return) or keep consuming (no handlers blocked → text-only
+  // turn or ToolSearch-only turn continues naturally).
 
   for await (const event of dispatchPersistentTurn(req, { manager: deps.manager, createRuntime })) {
     // Capture the SDK session id on the first result event so server.ts
@@ -268,8 +273,9 @@ async function* runPersistent(ctx: TurnContext & { profileSessionId: string }, d
       deps.onSessionIdCaptured(ctx.profileSessionId, sid)
     }
 
-    // Track tool_use blocks in assistant messages so we can detect the
-    // deferred-handler pause condition (§5.12d).
+    // Track tool_use blocks in assistant messages so we can tell whether
+    // the just-finished message had any tools in it. Set on the per-block
+    // `assistant` rebuild events; does NOT fire the pause on its own.
     if ((event as { type?: string }).type === "assistant") {
       const content = (event as { message?: { content?: unknown } }).message?.content
       if (Array.isArray(content)) {
@@ -282,28 +288,35 @@ async function* runPersistent(ctx: TurnContext & { profileSessionId: string }, d
       }
     }
 
+    // Detect stream `message_stop` — the signal that the current assistant
+    // message has fully finished streaming its content blocks to the
+    // client. Use optional chaining in case an event arrives without an
+    // `event` sub-object.
+    const isStreamMessageStop =
+      (event as { type?: string }).type === "stream_event" &&
+      ((event as { event?: { type?: string } }).event?.type === "message_stop")
+
     yield event
 
-    // Early-exit: if the runtime has pending deferred handlers after
-    // yielding a tool_use-bearing message, the SDK is blocked waiting for
-    // the client to return the tool_result. Do not await the next
-    // SDK event (it will never come until the client returns). Synthesise
-    // an SSE message_delta { stop_reason: "tool_use" } + message_stop in
-    // streaming mode (so Pi's SSE parser closes cleanly on a valid frame
-    // sequence), followed by a synthetic `result` terminator so the
-    // server-side SSE / non-stream layer treats this as a clean turn end.
-    // The runtime stays alive in the manager; the next HTTP request's
-    // tool_result resolves the handler.
-    const runtime = deps.manager.get(ctx.profileSessionId)
-    if (sawToolUse && runtime && runtime.pendingCount > 0) {
-      // Mark the runtime so the NEXT HTTP turn's SSE layer knows to
-      // prepend a synthetic message_start before the SDK's mid-message
-      // continuation events (§5.12d). Only relevant for streaming turns;
-      // non-streaming turns buffer the whole response server-side so
-      // SSE framing doesn't apply.
-      if (ctx.stream) markRuntimeContinuation(runtime)
-      yield makePendingPauseResult(runtime.claudeSessionId, ctx.stream)
-      return
+    // Early-exit — only after message_stop. Waiting for message_stop
+    // ensures the client has received every content_block_start / delta /
+    // stop for every tool_use in the message. If handlers are blocked
+    // (pendingCount > 0), pause the turn so the client can execute the
+    // tools and return the results on the next HTTP request; otherwise
+    // continue iterating (the SDK may still emit more message_starts on
+    // the same logical turn, e.g. after an internal ToolSearch resolve).
+    if (isStreamMessageStop) {
+      const runtime = deps.manager.get(ctx.profileSessionId)
+      if (sawToolUse && runtime && runtime.pendingCount > 0) {
+        // Mark the runtime so the NEXT HTTP turn's SSE layer knows to
+        // prepend a synthetic message_start before the SDK's mid-message
+        // continuation events. Only relevant for streaming turns;
+        // non-streaming turns buffer the whole response server-side so
+        // SSE framing doesn't apply.
+        if (ctx.stream) markRuntimeContinuation(runtime)
+        yield makePendingPauseResult(runtime.claudeSessionId, ctx.stream)
+        return
+      }
     }
   }
 }

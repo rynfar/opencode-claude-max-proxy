@@ -243,11 +243,14 @@ describe("startTurn — persistent path", () => {
     // the mock's script is a single nextTurnsByCall entry with multiple
     // turn slots: [warmup, tool-use]. The runtime is created on the first
     // push; we register a pending handler between turns so pendingCount > 0
-    // when the dispatcher yields the tool_use assistant event.
+    // when message_stop lands. turnRunner's early-exit gates on the
+    // `stream_event { type: "message_stop" }`, not on the per-tool-use
+    // assistant rebuild event — matching the real SDK's event ordering.
     nextTurnsByCall.push([
       { events: [] as any[] },
       { events: [
         { type: "assistant", message: { content: [{ type: "tool_use", id: "toolu_pending", name: "read" }] } } as any,
+        { type: "stream_event", event: { type: "message_stop" } } as any,
       ] },
     ])
 
@@ -259,11 +262,68 @@ describe("startTurn — persistent path", () => {
     await drain(startTurn(baseCtx({ stream: true, userContent: "use read" }), deps))
 
     // turnRunner should have called markRuntimeContinuation because
-    // stream=true + sawToolUse=true + pendingCount > 0.
+    // stream=true + sawToolUse=true + pendingCount > 0 AT message_stop.
     expect(consumeRuntimeContinuation(rt)).toBe(true)
 
     // Cleanup: reject the pending promise so it doesn't linger as an
     // unhandled rejection after the test ends.
+    const caught = pending.catch(() => {})
+    rt.rejectAllPending(new Error("test cleanup"))
+    await caught
+  })
+
+  it("does NOT pause mid-message — waits for stream message_stop even with multiple tool_use assistant rebuilds", async () => {
+    // Regression gate for scenario O (Opus + thinking=high + parallel
+    // passthrough tools). Before this fix, turnRunner fired the pause on
+    // the FIRST tool_use assistant rebuild event if any handler had
+    // registered — truncating the second tool_use's content blocks. Now
+    // the pause gates on stream message_stop so the full message lands.
+    const manager = createSessionRuntimeManager({ idleMs: 60_000, maxLive: 4 })
+    const deps = { config: { ...DEFAULT_PROXY_CONFIG, persistentSessions: true }, manager }
+    nextTurnsByCall.push([
+      { events: [] as any[] },
+      { events: [
+        // Per-tool-use assistant rebuild for tool 1 arrives mid-message.
+        { type: "assistant", message: { content: [{ type: "tool_use", id: "toolu_1", name: "read" }] } } as any,
+        // Per-tool-use assistant rebuild for tool 2 still mid-message.
+        { type: "assistant", message: { content: [{ type: "tool_use", id: "toolu_2", name: "bash" }] } } as any,
+        // message_stop arrives LAST — only now do we check pendingCount.
+        { type: "stream_event", event: { type: "message_stop" } } as any,
+      ] },
+    ])
+
+    await drain(startTurn(baseCtx({ userContent: "warmup" }), deps))
+    const rt = manager.get("sess-A")!
+    // Register pending for tool 1 so pendingCount=1 by the time the
+    // two tool_use assistant events arrive. Despite pendingCount>0 on
+    // those mid-message events, the pause MUST wait for message_stop.
+    const pending = rt.registerPendingExecution("toolu_1")
+
+    // Collect yielded events to confirm both assistant rebuilds AND the
+    // stream message_stop are yielded before the synthetic pause result.
+    const yielded: Array<{ type: string; subType?: string }> = []
+    for await (const ev of startTurn(baseCtx({ stream: true, userContent: "parallel" }), deps)) {
+      yielded.push({
+        type: (ev as any).type,
+        subType: (ev as any).event?.type,
+      })
+    }
+
+    // Both assistant events + the stream message_stop + the synthetic
+    // pause result should all be present, in order. Zero mid-message
+    // truncation.
+    const types = yielded.map((y) => y.subType ? `${y.type}:${y.subType}` : y.type)
+    expect(types).toContain("assistant")
+    expect(types).toContain("stream_event:message_stop")
+    expect(types.filter((t) => t === "assistant").length).toBe(2)
+    // stream_event:message_stop must appear before any synthetic result
+    const stopIdx = types.indexOf("stream_event:message_stop")
+    const resultIdx = types.indexOf("result")
+    expect(stopIdx).toBeGreaterThanOrEqual(0)
+    expect(resultIdx).toBeGreaterThan(stopIdx)
+
+    expect(consumeRuntimeContinuation(rt)).toBe(true)
+
     const caught = pending.catch(() => {})
     rt.rejectAllPending(new Error("test cleanup"))
     await caught

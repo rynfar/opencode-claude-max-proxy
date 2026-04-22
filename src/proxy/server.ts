@@ -34,7 +34,7 @@ import { exec as execCallback } from "child_process"
 import { promisify } from "util"
 import { randomUUID } from "crypto"
 import { withClaudeLogContext } from "../logger"
-import { createPassthroughMcpServer, stripMcpPrefix, computeToolSetKey, PASSTHROUGH_MCP_NAME, PASSTHROUGH_MCP_PREFIX } from "./passthroughTools"
+import { createPassthroughMcpServer, stripMcpPrefix, normalizeToolInput, computeToolSetKey, PASSTHROUGH_MCP_NAME, PASSTHROUGH_MCP_PREFIX } from "./passthroughTools"
 import { LRUMap } from "../utils/lruMap"
 
 import { telemetryStore, diagnosticLog, createTelemetryRoutes, landingHtml, renderPrometheusMetrics } from "../telemetry"
@@ -813,10 +813,14 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
                 if (hasDeferredTools && coreSet && !coreSet.has(toolName.toLowerCase())) {
                   discoveredTools.add(toolName)
                 }
+                // Normalize parameter names: the SDK system prompt references
+                // built-in tools with snake_case params (file_path), but clients
+                // may use camelCase (filePath). Remap when required fields are missing.
+                const clientTool = requestTools.find((t: any) => t.name === toolName)
                 capturedToolUses.push({
                   id: input.tool_use_id,
                   name: toolName,
-                  input: input.tool_input,
+                  input: normalizeToolInput(input.tool_input, clientTool?.input_schema),
                 })
                 return {
                   decision: "block" as const,

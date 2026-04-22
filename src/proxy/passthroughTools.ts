@@ -191,3 +191,62 @@ export function stripMcpPrefix(toolName: string): string {
   }
   return toolName
 }
+
+function toCamelCase(s: string): string {
+  return s.replace(/_([a-z])/g, (_, c) => c.toUpperCase())
+}
+
+function toSnakeCase(s: string): string {
+  return s.replace(/[A-Z]/g, c => `_${c.toLowerCase()}`)
+}
+
+/**
+ * Normalize tool input parameter names to match the client's schema.
+ *
+ * The Claude Code SDK's system prompt references built-in tools with
+ * snake_case parameter names (e.g., file_path), but clients like OpenCode
+ * may use camelCase (e.g., filePath). When the model generates a tool call
+ * using the SDK's naming convention instead of the MCP schema's convention,
+ * required parameters appear undefined on the client side.
+ *
+ * This function detects unrecognized keys, tries snake_case ↔ camelCase
+ * conversion, and remaps them when a match exists in the client's schema.
+ * It only activates when at least one required parameter is missing, so
+ * well-formed tool calls pass through untouched.
+ */
+export function normalizeToolInput(
+  input: Record<string, unknown> | undefined,
+  clientSchema: { properties?: Record<string, unknown>; required?: string[] } | undefined,
+): Record<string, unknown> | undefined {
+  if (!input || !clientSchema?.properties) return input
+
+  const schemaKeys = new Set(Object.keys(clientSchema.properties))
+  const required = new Set(clientSchema.required ?? [])
+
+  // Fast path: all required fields are present, no normalization needed
+  const missingRequired = [...required].filter(k => input[k] === undefined)
+  if (missingRequired.length === 0) return input
+
+  const normalized = { ...input }
+
+  for (const key of Object.keys(normalized)) {
+    if (schemaKeys.has(key)) continue // Already matches
+
+    // Try camelCase: file_path → filePath
+    const camel = toCamelCase(key)
+    if (camel !== key && schemaKeys.has(camel) && normalized[camel] === undefined) {
+      normalized[camel] = normalized[key]
+      delete normalized[key]
+      continue
+    }
+
+    // Try snake_case: filePath → file_path
+    const snake = toSnakeCase(key)
+    if (snake !== key && schemaKeys.has(snake) && normalized[snake] === undefined) {
+      normalized[snake] = normalized[key]
+      delete normalized[key]
+    }
+  }
+
+  return normalized
+}

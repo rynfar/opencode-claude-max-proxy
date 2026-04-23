@@ -817,10 +817,19 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
                 // built-in tools with snake_case params (file_path), but clients
                 // may use camelCase (filePath). Remap when required fields are missing.
                 const clientTool = requestTools.find((t: any) => t.name === toolName)
+                // NOTE: agent-specific — normalize subagent_type to lowercase.
+                // Claude often sends PascalCase (e.g., "Explore") but OpenCode
+                // validates agent types case-sensitively against its config.
+                let toolInput = normalizeToolInput(input.tool_input, clientTool?.input_schema)
+                if (toolName.toLowerCase() === "task" && toolInput?.subagent_type && typeof toolInput.subagent_type === "string") {
+                  let mapped = toolInput.subagent_type.toLowerCase()
+                  if (mapped === "general-purpose") mapped = "general"
+                  toolInput = { ...toolInput, subagent_type: mapped }
+                }
                 capturedToolUses.push({
                   id: input.tool_use_id,
                   name: toolName,
-                  input: normalizeToolInput(input.tool_input, clientTool?.input_schema),
+                  input: toolInput,
                 })
                 return {
                   decision: "block" as const,
@@ -1114,19 +1123,29 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
             throw error
           }
 
-          // In passthrough mode, add captured tool_use blocks from the hook
-          // (the SDK may not include them in content after blocking)
+          // In passthrough mode, merge captured tool_use blocks from the hook.
+          // The PreToolUse hook normalizes tool input (e.g., subagent_type casing,
+          // parameter name mapping). If the SDK already included the tool_use in
+          // its content blocks, replace the input with the normalized version.
+          // If the SDK omitted it (blocked tools may not appear), add it.
           if (passthrough && capturedToolUses.length > 0) {
-            for (const tu of capturedToolUses) {
-              // Only add if not already in contentBlocks
-              if (!contentBlocks.some((b) => b.type === "tool_use" && (b as any).id === tu.id)) {
-                contentBlocks.push({
-                  type: "tool_use",
-                  id: tu.id,
-                  name: tu.name,
-                  input: tu.input,
-                })
+            const capturedById = new Map(capturedToolUses.map(tu => [tu.id, tu]))
+            for (const block of contentBlocks) {
+              if (block.type === "tool_use" && capturedById.has((block as any).id)) {
+                const captured = capturedById.get((block as any).id)!
+                ;(block as any).name = captured.name
+                ;(block as any).input = captured.input
+                capturedById.delete((block as any).id)
               }
+            }
+            // Add any remaining captured tool_use blocks not in content
+            for (const tu of capturedById.values()) {
+              contentBlocks.push({
+                type: "tool_use",
+                id: tu.id,
+                name: tu.name,
+                input: tu.input,
+              })
             }
           }
 
@@ -1457,6 +1476,12 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
               }, 15_000)
 
               const skipBlockIndices = new Set<number>()
+              // NOTE: agent-specific — track block indices for "task" tool_use blocks
+              // so we can normalize subagent_type in streamed input_json_delta events.
+              // Deltas are buffered because input_json_delta sends JSON in chunks —
+              // the key-value pair may span multiple deltas, preventing regex match.
+              const taskToolBlockIndices = new Set<number>()
+              const taskToolJsonBuffer = new Map<number, string>()
               const streamedToolUseIds = new Set<string>()
 
               // Block index remapping: the SDK resets indices on each turn, but
@@ -1570,6 +1595,11 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
                           // condition fires correctly.
                           streamedToolUseIds.add(block.id)
                         }
+                        // NOTE: agent-specific — track "task" tool blocks so we can
+                        // normalize subagent_type in their streamed input_json_delta.
+                        if (passthrough && eventIndex !== undefined && block.name.toLowerCase() === "task") {
+                          taskToolBlockIndices.add(eventIndex)
+                        }
                       }
                       // Assign a monotonic client index for this forwarded block
                       if (eventIndex !== undefined) {
@@ -1596,6 +1626,50 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
                       if (stopReason === "tool_use" && skipBlockIndices.size > 0) {
                         // All tool_use blocks in this turn were MCP — skip this delta
                         continue
+                      }
+                    }
+
+                    // NOTE: agent-specific — buffer input_json_delta for Task tool blocks.
+                    // Claude sends PascalCase subagent_type (e.g., "Explore") and aliases
+                    // like "general-purpose" that OpenCode rejects. input_json_delta sends
+                    // JSON in chunks so we can't regex-replace individual deltas — buffer
+                    // all chunks and emit the fixed JSON at content_block_stop.
+                    if (
+                      passthrough &&
+                      eventIndex !== undefined &&
+                      taskToolBlockIndices.has(eventIndex)
+                    ) {
+                      if (eventType === "content_block_delta") {
+                        const delta = (event as any).delta
+                        if (delta?.type === "input_json_delta" && typeof delta.partial_json === "string") {
+                          const prev = taskToolJsonBuffer.get(eventIndex) ?? ""
+                          taskToolJsonBuffer.set(eventIndex, prev + delta.partial_json)
+                          continue // Don't forward — emit complete JSON at block_stop
+                        }
+                      }
+                      if (eventType === "content_block_stop") {
+                        const buffered = taskToolJsonBuffer.get(eventIndex)
+                        if (buffered) {
+                          const fixed = buffered.replace(
+                            /"subagent_type"\s*:\s*"([^"]+)"/,
+                            (_: string, v: string) => {
+                              let mapped = v.toLowerCase()
+                              // Map common Claude-invented aliases to valid OpenCode agents
+                              if (mapped === "general-purpose") mapped = "general"
+                              return `"subagent_type":"${mapped}"`
+                            }
+                          )
+                          const clientIdx = sdkToClientIndex.get(eventIndex) ?? eventIndex
+                          safeEnqueue(encoder.encode(
+                            `event: content_block_delta\ndata: ${JSON.stringify({
+                              type: "content_block_delta",
+                              index: clientIdx,
+                              delta: { type: "input_json_delta", partial_json: fixed }
+                            })}\n\n`
+                          ), "task_tool_fixed_delta")
+                          taskToolJsonBuffer.delete(eventIndex)
+                        }
+                        // Fall through to forward content_block_stop normally
                       }
                     }
 

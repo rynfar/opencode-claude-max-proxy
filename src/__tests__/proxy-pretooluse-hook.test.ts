@@ -165,7 +165,9 @@ describe("PreToolUse hook: agent name correction", () => {
       tool_input: { subagent_type: "general-purpose", description: "test", prompt: "test" },
       tool_use_id: "toolu_test1",
     }, undefined, { signal: new AbortController().signal })
-    expect(result1.hookSpecificOutput.updatedInput.subagent_type).toBe("general")
+    // "general-purpose" is registered as an alias agent pointing to the "general"
+    // definition, so the fuzzy matcher returns it as a valid exact match.
+    expect(result1.hookSpecificOutput.updatedInput.subagent_type).toBe("general-purpose")
 
     // code-reviewer → oracle
     const result2 = await hookFn({

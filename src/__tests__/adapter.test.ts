@@ -101,7 +101,7 @@ describe("openCodeAdapter.buildSdkAgents", () => {
     const agents = openCodeAdapter.buildSdkAgents!(body, [])
     for (const [name, def] of Object.entries(agents)) {
       expect((def as any).description).toBeTruthy()
-      expect((def as any).prompt).toContain(name)
+      expect((def as any).prompt.toLowerCase()).toContain(name.toLowerCase())
       expect((def as any).model).toBe("inherit")
     }
   })

@@ -301,6 +301,35 @@ describe("SessionRuntime", () => {
     }
     expect(aborted).toBe(0)
   })
+
+  it("does NOT fire onTurnAborted when pending handlers exist at break (scenario V)", async () => {
+    // turnRunner's legitimate message_stop + pendingCount>0 pause path
+    // breaks out of consumeTurn via .return() cascade (no terminator seen).
+    // That must NOT be treated as a client abort — dropping the runtime
+    // while handlers are awaiting the client's tool_results poisons the
+    // next turn's cold-reattach. Pending>0 is the discriminator.
+    let aborted = 0
+    const events: SDKMessage[] = [
+      { type: "assistant" } as unknown as SDKMessage,
+      { type: "assistant" } as unknown as SDKMessage,
+      { type: "result", subtype: "success" } as unknown as SDKMessage,
+    ]
+    const runtime = createSessionRuntime({
+      profileSessionId: "p1",
+      query: fakeQuery(events),
+      inputQueue: createAsyncQueue<SDKUserMessage>(),
+      onTurnAborted: () => { aborted++ },
+    })
+    // Simulate a pending deferred handler (passthrough tool awaiting
+    // client's tool_result). Don't await the promise — we want the entry
+    // to remain in the pending registry when the for-await breaks.
+    void runtime.registerPendingExecution("toolu_pending_1")
+    for await (const _ of runtime.consumeTurn()) {
+      break
+    }
+    expect(runtime.pendingCount).toBe(1)
+    expect(aborted).toBe(0)
+  })
 })
 
 describe("classifyPassthroughRequest", () => {

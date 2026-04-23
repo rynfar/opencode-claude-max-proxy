@@ -528,7 +528,18 @@ export function createSessionRuntime(init: SessionRuntimeInit): SessionRuntime {
         // onTurnAborted for the full rationale. Only fire on unclean exit
         // — `terminated` guards normal completion, `closed` guards the
         // shutdown path where the runtime is already being torn down.
-        if (!terminated && !closed) {
+        //
+        // `pending.size === 0` gate: turnRunner's legitimate pending-tools
+        // pause path (message_stop + pendingCount > 0) also exits this
+        // generator via .return() cascade without a terminator, since the
+        // synthetic `result` is yielded by turnRunner NOT by consumeTurn.
+        // If handlers are pending, the SDK subprocess is still alive mid-
+        // turn waiting for the client's tool_results, and dropping the
+        // runtime here poisons the next HTTP turn's cold-reattach
+        // (prebound tool_results have no handler to drain them). Treat
+        // "broken exit with pending handlers" as a benign pause rather
+        // than a client abort.
+        if (!terminated && !closed && pending.size === 0) {
           try { init.onTurnAborted?.() } catch { /* swallow */ }
         }
       }

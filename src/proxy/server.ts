@@ -819,7 +819,33 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
         // `classifyPassthroughRequest`. Grabbing only the single last user
         // message stranded tool_results whenever a steer was pending and
         // hung the SDK on blocked deferred handlers.
-        const persistentUserContent = extractTrailingUserContent(body.messages || [])
+        //
+        // Cold-start-with-history case (`pi --fork`, transcript hand-off):
+        // when there is NO cached SDK session to resume from but the
+        // request carries a multi-message conversation, `runPersistent`
+        // starts a fresh SDK query with an empty in-memory history. If we
+        // only push the trailing user message here, the model sees its
+        // first turn in isolation and replies "I have no prior context".
+        // Mirror the legacy path's behaviour by seeding the first turn
+        // with the full Human/Assistant transcript (same `textPrompt` the
+        // legacy path would have built). Delta-only push is preserved for
+        // every warm / resume turn so Anthropic's prompt cache stays warm.
+        const hasColdStartHistory =
+          !cachedSession &&
+          Array.isArray(body.messages) &&
+          body.messages.length > 1 &&
+          !hasMultimodal &&
+          typeof textPrompt === "string" &&
+          textPrompt.length > 0
+        // Wrap as a single `text` content block rather than a bare string:
+        // `classifyPassthroughRequest` routes non-array strings via
+        // `pushContent = [content]`, which produces `[string]` — a malformed
+        // Anthropic content payload that the SDK bails on with
+        // "request ended without sending any chunks". Using the block form
+        // keeps the classifier on its array branch where the text survives.
+        const persistentUserContent: unknown = hasColdStartHistory
+          ? [{ type: "text" as const, text: textPrompt as string }]
+          : extractTrailingUserContent(body.messages || [])
         const persistentPassthroughSpec = passthrough && requestTools.length > 0
           ? { tools: requestTools as never[], coreToolNames: adapter.getCoreToolNames?.() }
           : null

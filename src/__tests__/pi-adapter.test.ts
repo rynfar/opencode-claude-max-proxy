@@ -1,7 +1,7 @@
 /**
  * Tests for the Pi coding agent adapter.
  */
-import { describe, it, expect } from "bun:test"
+import { describe, it, expect, afterEach } from "bun:test"
 import { piAdapter } from "../proxy/adapters/pi"
 
 describe("piAdapter — identity", () => {
@@ -195,8 +195,39 @@ describe("piAdapter.buildSystemContextAddendum", () => {
 })
 
 describe("piAdapter.usesPassthrough", () => {
-  it("is not defined — defers to CLAUDE_PROXY_PASSTHROUGH env var", () => {
-    expect(piAdapter.usesPassthrough).toBeUndefined()
+  const origMeridian = process.env.MERIDIAN_PASSTHROUGH
+  const origLegacy = process.env.CLAUDE_PROXY_PASSTHROUGH
+  afterEach(() => {
+    if (origMeridian === undefined) delete process.env.MERIDIAN_PASSTHROUGH
+    else process.env.MERIDIAN_PASSTHROUGH = origMeridian
+    if (origLegacy === undefined) delete process.env.CLAUDE_PROXY_PASSTHROUGH
+    else process.env.CLAUDE_PROXY_PASSTHROUGH = origLegacy
+  })
+
+  it("defaults ON when no env var is set — pi's local tools (web_search etc) only reach the model through passthrough", () => {
+    delete process.env.MERIDIAN_PASSTHROUGH
+    delete process.env.CLAUDE_PROXY_PASSTHROUGH
+    expect(piAdapter.usesPassthrough!()).toBe(true)
+  })
+
+  it("respects explicit opt-out via MERIDIAN_PASSTHROUGH=0", () => {
+    process.env.MERIDIAN_PASSTHROUGH = "0"
+    expect(piAdapter.usesPassthrough!()).toBe(false)
+  })
+
+  it("respects explicit opt-out via legacy CLAUDE_PROXY_PASSTHROUGH=false", () => {
+    delete process.env.MERIDIAN_PASSTHROUGH
+    process.env.CLAUDE_PROXY_PASSTHROUGH = "false"
+    expect(piAdapter.usesPassthrough!()).toBe(false)
+  })
+
+  it("stays ON for truthy values (1, true, yes) and any unrecognized value", () => {
+    process.env.MERIDIAN_PASSTHROUGH = "1"
+    expect(piAdapter.usesPassthrough!()).toBe(true)
+    process.env.MERIDIAN_PASSTHROUGH = "true"
+    expect(piAdapter.usesPassthrough!()).toBe(true)
+    process.env.MERIDIAN_PASSTHROUGH = "anything-else"
+    expect(piAdapter.usesPassthrough!()).toBe(true)
   })
 })
 

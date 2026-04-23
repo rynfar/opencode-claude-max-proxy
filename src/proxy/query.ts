@@ -142,7 +142,14 @@ export function buildQueryOptions(ctx: QueryContext): BuildQueryResult {
       // the model responds, so allow 3 turns to prevent "max turns (2)" errors.
       // With deferred tools: ToolSearch consumes a turn before the actual tool
       // call, so allow 3 turns to give room for search + call + handoff.
-      maxTurns: passthrough ? ((resumeSessionId || hasDeferredTools) ? 3 : 2) : 200,
+      // With BOTH resume and deferred tools: rehydration + ToolSearch + call +
+      // handoff each need their own turn, so allow 4 turns to prevent
+      // "max turns (3)" errors when both extensions are active simultaneously.
+      maxTurns: passthrough
+        ? (resumeSessionId && hasDeferredTools
+            ? 4
+            : (resumeSessionId || hasDeferredTools) ? 3 : 2)
+        : 200,
       cwd: workingDirectory,
       model,
       pathToClaudeCodeExecutable: claudeExecutable,

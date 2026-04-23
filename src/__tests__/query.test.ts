@@ -65,6 +65,15 @@ describe("buildQueryOptions", () => {
     expect(result.options.maxTurns).toBe(3)
   })
 
+  it("sets maxTurns to 4 in passthrough mode when resume AND deferred tools are both active", () => {
+    const result = buildQueryOptions(makeContext({
+      passthrough: true,
+      resumeSessionId: "sess-123",
+      hasDeferredTools: true,
+    }))
+    expect(result.options.maxTurns).toBe(4)
+  })
+
   it("includes system prompt as preset in normal mode", () => {
     const result = buildQueryOptions(makeContext({ systemContext: "Be helpful" }))
     const sp = (result.options as any).systemPrompt

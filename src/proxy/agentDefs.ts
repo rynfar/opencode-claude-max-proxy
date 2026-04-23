@@ -11,6 +11,21 @@
  * model tiers, and tool access.
  */
 
+/** Fallback agent name used when no fuzzy match is found */
+export const FALLBACK_AGENT_NAME = "general"
+
+/**
+ * Well-known agent types that the SDK (or Claude) commonly references.
+ * These are injected as defaults when parsing yields user-defined agents
+ * but is missing one or more of these types.
+ */
+const DEFAULT_AGENT_TYPES: Record<string, string> = {
+  build: "The default agent. Executes tools based on configured permissions.",
+  plan: "Plan mode. Disallows all edit tools.",
+  explore: "Contextual grep for codebases. Answers 'Where is X?', 'Which file has Y?'.",
+  general: "General-purpose agent for researching complex questions and executing multi-step tasks.",
+}
+
 /** SDK-compatible agent definition */
 export interface AgentDefinition {
   description: string
@@ -89,7 +104,71 @@ export function buildAgentDefinitions(
     }
   }
 
+  // Inject defaults only when parsing yielded at least one agent.
+  // If parsing yielded nothing, leave empty so the SDK uses its built-in types.
+  if (descriptions.size > 0) {
+    ensureDefaultAgents(agents, mcpToolNames)
+    addCaseVariants(agents)
+  }
+
   return agents
+}
+
+/**
+ * Fill in any well-known default agents not already present in the agents map.
+ * User-defined agents always take priority (we never overwrite).
+ */
+function ensureDefaultAgents(
+  agents: Record<string, AgentDefinition>,
+  mcpToolNames?: string[]
+): void {
+  for (const [name, description] of Object.entries(DEFAULT_AGENT_TYPES)) {
+    if (!agents[name]) {
+      agents[name] = {
+        description,
+        prompt: buildAgentPrompt(name, description),
+        model: "inherit",
+        ...(mcpToolNames?.length ? { tools: [...mcpToolNames] } : {}),
+      }
+    }
+  }
+}
+
+/**
+ * Register PascalCase aliases for every agent.
+ *
+ * Claude frequently sends capitalized agent names (e.g., "Explore", "Plan").
+ * The SDK's Claude subprocess validates subagent_type against the registered
+ * agents map BEFORE our PreToolUse hook can rewrite it. By registering
+ * PascalCase variants we ensure they pass validation.
+ *
+ * Also registers common Claude-invented names like "general-purpose".
+ */
+function addCaseVariants(agents: Record<string, AgentDefinition>): void {
+  // Snapshot keys before mutating (avoids iterating newly-added entries)
+  const baseNames = Object.keys(agents)
+
+  for (const name of baseNames) {
+    const def = agents[name]!
+    // Title-case: "explore" → "Explore", "sisyphus-junior" → "Sisyphus-Junior"
+    const titleCase = name.replace(/(^|-)(\w)/g, (_m, sep: string, ch: string) =>
+      sep + ch.toUpperCase()
+    )
+    if (titleCase !== name && !agents[titleCase]) {
+      agents[titleCase] = def
+    }
+  }
+
+  // Common Claude-invented aliases that map to registered agents
+  const ALIASES: Record<string, string> = {
+    "general-purpose": "general",
+    "General-Purpose": "general",
+  }
+  for (const [alias, target] of Object.entries(ALIASES)) {
+    if (!agents[alias] && agents[target]) {
+      agents[alias] = agents[target]!
+    }
+  }
 }
 
 /**

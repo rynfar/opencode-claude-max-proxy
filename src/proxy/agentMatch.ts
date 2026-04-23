@@ -12,8 +12,10 @@
  * 4. Substring match (e.g., "junior" → "sisyphus-junior")
  * 5. Suffix-stripped match (e.g., "explore-agent" → "explore")
  * 6. Semantic aliases (e.g., "search" → "explore")
- * 7. Fallback: return lowercased original
+ * 7. Fallback: route to generic agent if registered, otherwise lowercased original
  */
+
+import { FALLBACK_AGENT_NAME } from "./agentDefs"
 
 // Known aliases for common SDK mistakes
 const KNOWN_ALIASES: Record<string, string> = {
@@ -88,6 +90,7 @@ export function fuzzyMatchAgentName(input: string, validAgents: string[]): strin
   const reverseMatch = validAgents.find(a => lowered.includes(a.toLowerCase()))
   if (reverseMatch) return reverseMatch
 
-  // 7. Fallback
+  // 7. Fallback: route to registered generic agent if available
+  if (validAgents.includes(FALLBACK_AGENT_NAME)) return FALLBACK_AGENT_NAME
   return lowered
 }

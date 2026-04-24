@@ -499,6 +499,12 @@ ANTHROPIC_AUTH_TOKEN=x ANTHROPIC_BASE_URL=http://meridian-host:3456 claude
 > treats both as bearer credentials. Set the value to your `MERIDIAN_API_KEY`
 > if you've enabled authentication, otherwise any string works.
 
+> ⚠️ **Security for multi-machine setups.** If you expose Meridian beyond
+> loopback (e.g. bind to `0.0.0.0` or a LAN IP), **set `MERIDIAN_API_KEY` to a
+> strong secret** and require it on clients. An unprotected network-accessible
+> proxy is a Claude Max credential leak — anyone who can reach the port can
+> burn your subscription.
+
 Claude Code is detected automatically via its `claude-cli/*` User-Agent.
 Requests flow through the Claude Code adapter which:
 

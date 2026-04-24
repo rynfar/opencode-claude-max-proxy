@@ -22,6 +22,7 @@
       },
       "original": {
         "owner": "nix-community",
+        "ref": "2.0.8",
         "repo": "bun2nix",
         "type": "github"
       }

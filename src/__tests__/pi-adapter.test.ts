@@ -91,6 +91,51 @@ describe("piAdapter.extractWorkingDirectory", () => {
   })
 })
 
+describe("piAdapter.extractClientWorkingDirectory", () => {
+  it("mirrors extractWorkingDirectory — returns the parsed CWD", () => {
+    const body = {
+      system: "You are an expert coding assistant.\nCurrent working directory: /Users/test/project",
+    }
+    expect(piAdapter.extractClientWorkingDirectory!(body)).toBe("/Users/test/project")
+  })
+
+  it("extracts from array system prompt", () => {
+    const body = {
+      system: [
+        { type: "text", text: "System intro." },
+        { type: "text", text: "Current working directory: /tmp/my-repo" },
+      ],
+    }
+    expect(piAdapter.extractClientWorkingDirectory!(body)).toBe("/tmp/my-repo")
+  })
+
+  it("returns undefined when system prompt lacks the CWD line", () => {
+    expect(
+      piAdapter.extractClientWorkingDirectory!({ system: "no cwd line here" })
+    ).toBeUndefined()
+  })
+
+  it("returns undefined when system prompt is missing", () => {
+    expect(piAdapter.extractClientWorkingDirectory!({})).toBeUndefined()
+  })
+
+  it("returns the same value as extractWorkingDirectory for any body", () => {
+    // This parity guarantee is load-bearing: the default resolution in
+    // server.ts collapses the two paths for same-host clients. If they
+    // diverged, buildCwdNote would emit a spurious <env> addendum.
+    const bodies = [
+      { system: "Current working directory: /a" },
+      { system: [{ type: "text", text: "Current working directory: /b" }] },
+      { system: "no directory here" },
+      {},
+    ]
+    for (const body of bodies) {
+      expect(piAdapter.extractClientWorkingDirectory!(body))
+        .toBe(piAdapter.extractWorkingDirectory(body))
+    }
+  })
+})
+
 describe("piAdapter.normalizeContent", () => {
   it("normalizes string content", () => {
     expect(piAdapter.normalizeContent("hello world")).toBe("hello world")

@@ -80,6 +80,19 @@ export const piAdapter: AgentAdapter = {
     return extractPiCwd(body)
   },
 
+  /**
+   * Pi normally runs on the same host as the proxy, so the SDK subprocess
+   * can chdir into the client's project (see extractWorkingDirectory).
+   * Still expose the parse as extractClientWorkingDirectory too — this
+   * decouples fingerprint bucketing from MERIDIAN_WORKDIR (so two unrelated
+   * Pi projects don't share a fingerprint namespace just because the proxy
+   * is pinned to one cwd) and leaves a hook for any future remote-Pi setups
+   * where client and proxy paths diverge.
+   */
+  extractClientWorkingDirectory(body: any): string | undefined {
+    return extractPiCwd(body)
+  },
+
   normalizeContent(content: any): string {
     return normalizeContent(content)
   },

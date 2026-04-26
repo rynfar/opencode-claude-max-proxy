@@ -11,6 +11,7 @@ import { describe, it, expect, mock } from "bun:test"
 mock.module("../proxy/models", () => ({
   getClaudeAuthStatusAsync: async () => null,
   resolveClaudeExecutableAsync: async () => "claude",
+  resolveSdkModelDefaults: () => ({}),
   mapModelToClaudeModel: (model: string) => {
     if (model.toLowerCase().includes("opus")) return "opus"
     if (model.toLowerCase().includes("haiku")) return "haiku"

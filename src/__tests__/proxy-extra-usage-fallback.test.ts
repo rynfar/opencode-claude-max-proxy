@@ -31,6 +31,7 @@ const EXTRA_USAGE_ERROR = "Claude Code returned an error result: API Error: Extr
 mock.module("../proxy/models", () => ({
   mapModelToClaudeModel: () => "sonnet[1m]",
   resolveClaudeExecutableAsync: async () => "claude",
+  resolveSdkModelDefaults: () => ({}),
   getClaudeAuthStatusAsync: async () => ({ loggedIn: true, subscriptionType: "max" }),
   hasExtendedContext: (model: string) => model.endsWith("[1m]"),
   stripExtendedContext: (model: string) => model.replace("[1m]", ""),

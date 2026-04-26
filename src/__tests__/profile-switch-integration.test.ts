@@ -33,6 +33,7 @@ mock.module("../logger", () => ({
 mock.module("../proxy/models", () => ({
   mapModelToClaudeModel: () => "sonnet",
   resolveClaudeExecutableAsync: async () => "claude",
+  resolveSdkModelDefaults: () => ({}),
   getClaudeAuthStatusAsync: async () => ({ loggedIn: true, email: "test@test.com", subscriptionType: "max" }),
   getAuthCacheInfo: () => ({ lastCheckedAt: 0, lastSuccessAt: 0, isFailure: false }),
   hasExtendedContext: () => false,

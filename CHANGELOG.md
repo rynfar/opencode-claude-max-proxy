@@ -1,5 +1,27 @@
 # Changelog
 
+## [1.39.0](https://github.com/rynfar/meridian/compare/meridian-v1.38.0...meridian-v1.39.0) (2026-04-26)
+
+
+### Features
+
+* advisor tool support via SDK advisorModel option ([#413](https://github.com/rynfar/meridian/issues/413)) ([c179753](https://github.com/rynfar/meridian/commit/c179753f14d083eb06a436c58f605d8215552de9))
+* Claude Code adapter with split SDK / client working directory ([a08b541](https://github.com/rynfar/meridian/commit/a08b541c482821f12e3004229debb23943a9f345))
+* default agent types and fallback routing ([3a660e9](https://github.com/rynfar/meridian/commit/3a660e93089057301b04365b5d35a441b860155d))
+
+
+### Bug Fixes
+
+* align haiku model id with sonnet/opus short form ([#414](https://github.com/rynfar/meridian/issues/414)) ([47292f5](https://github.com/rynfar/meridian/commit/47292f589186abf22196193801787a5e7cb5f523))
+* **models:** list claude-opus-4-7 in /v1/models ([#429](https://github.com/rynfar/meridian/issues/429)) ([b72bab8](https://github.com/rynfar/meridian/commit/b72bab87cf4f4b0e8e019a29eff1d168bfd5c7b0))
+* **models:** pin SDK model aliases via ANTHROPIC_DEFAULT_*_MODEL env ([601ccd3](https://github.com/rynfar/meridian/commit/601ccd31b1a02d92e92b5897dbec2259198428b7))
+* normalize context-usage to last iteration ([67a559f](https://github.com/rynfar/meridian/commit/67a559fd8ba39463398ed22f18c133d5bd82196b))
+* normalize context-usage to last iteration ([0170adc](https://github.com/rynfar/meridian/commit/0170adcdfed101d94cbac4d8ed0e051f373bab07))
+* normalize subagent_type in passthrough streaming and non-streaming ([41170e4](https://github.com/rynfar/meridian/commit/41170e4699c64660e7aa522da7b97d7c9ff6f386))
+* normalize tool parameter names in passthrough mode ([1b92899](https://github.com/rynfar/meridian/commit/1b92899c54e3885bda76b5644b76f38650a891a2))
+* **pi:** implement extractClientWorkingDirectory for defense in depth ([#428](https://github.com/rynfar/meridian/issues/428)) ([90fd26f](https://github.com/rynfar/meridian/commit/90fd26f22f8fbd37c24a34f6766606fab58a4808))
+* **proxy:** allow 4 turns when passthrough has both resume and deferred tools ([6648603](https://github.com/rynfar/meridian/commit/66486039dd7b1594285ded96ce0feecdd0ba2e45))
+
 ## [1.38.0](https://github.com/rynfar/meridian/compare/meridian-v1.37.8...meridian-v1.38.0) (2026-04-21)
 
 

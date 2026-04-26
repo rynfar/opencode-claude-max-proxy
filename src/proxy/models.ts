@@ -239,30 +239,27 @@ export async function resolveClaudeExecutableAsync(): Promise<string> {
   if (cachedClaudePathPromise) return cachedClaudePathPromise
 
   cachedClaudePathPromise = (async () => {
-    // The SDK runs cli.js via bun or node depending on the current runtime:
-    //   getDefaultExecutable() → "bun" if process.versions.bun, else "node"
-    //
-    // When run via node (bun not installed/not the runtime), cli.js + the
-    // --permission-mode bypassPermissions flag exits with code 1. This is
-    // the root cause of issue #203.
-    //
-    // Resolution order:
-    //   1. If running under bun: cli.js works correctly — use it
-    //   2. System claude binary: standalone, no runtime dependency, always safe
-    //   3. Last resort: cli.js via node (may fail for some permission modes)
+    // Resolution order (tightened after SDK 0.2.98 removed the bundled cli.js):
+    //   1. Bundled @anthropic-ai/claude-code binary — ships with Meridian
+    //      via dependency; version-pinned, always current with the SDK.
+    //      Postinstall (package.json) invokes its install.cjs so the stub
+    //      in bin/claude.exe is replaced with the real platform binary.
+    //   2. System-installed claude binary (user or package manager put it
+    //      on PATH) — fallback for installs where postinstall didn't run.
+    //   3. Legacy SDK bundled cli.js — only exists for SDK < 0.2.98; kept
+    //      as a best-effort fallback for stale installs. Removed in
+    //      SDK ≥ 0.2.98, so this branch is a no-op going forward.
     const runningUnderBun = typeof process.versions.bun !== "undefined"
 
-    // 1. SDK bundled cli.js — only when bun is the runtime
-    if (runningUnderBun) {
-      try {
-        const sdkPath = fileURLToPath(import.meta.resolve("@anthropic-ai/claude-agent-sdk"))
-        const sdkCliJs = join(dirname(sdkPath), "cli.js")
-        if (existsSync(sdkCliJs)) {
-          cachedClaudePath = sdkCliJs
-          return sdkCliJs
-        }
-      } catch {}
-    }
+    // 1. Bundled @anthropic-ai/claude-code binary (preferred — version-pinned)
+    try {
+      const pkgPath = fileURLToPath(import.meta.resolve("@anthropic-ai/claude-code/package.json"))
+      const bundledBinary = join(dirname(pkgPath), "bin", "claude.exe")
+      if (existsSync(bundledBinary)) {
+        cachedClaudePath = bundledBinary
+        return bundledBinary
+      }
+    } catch {}
 
     // 2. System-installed claude binary (standalone — no runtime dependency)
     try {
@@ -274,8 +271,8 @@ export async function resolveClaudeExecutableAsync(): Promise<string> {
       }
     } catch {}
 
-    // 3. Last resort: SDK cli.js via node (limited — bypassPermissions may fail)
-    if (!runningUnderBun) {
+    // 3. Legacy: SDK bundled cli.js (SDK < 0.2.98 only — removed in 0.2.98+)
+    if (runningUnderBun) {
       try {
         const sdkPath = fileURLToPath(import.meta.resolve("@anthropic-ai/claude-agent-sdk"))
         const sdkCliJs = join(dirname(sdkPath), "cli.js")

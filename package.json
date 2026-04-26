@@ -23,6 +23,7 @@
     "proxy": "./bin/claude-proxy-supervisor.sh",
     "build": "rm -rf dist && bun build bin/cli.ts src/proxy/server.ts --outdir dist --target node --splitting --external @anthropic-ai/claude-agent-sdk --entry-naming '[name].js' && tsc -p tsconfig.build.json",
     "postbuild": "node --check dist/cli.js && node --check dist/server.js && test -f dist/proxy/server.d.ts",
+    "postinstall": "node ./node_modules/@anthropic-ai/claude-code/install.cjs 2>/dev/null || true",
     "prepublishOnly": "bun run build",
     "test": "bun test --path-ignore-patterns '**/*session-store*' --path-ignore-patterns '**/*proxy-async-ops*' --path-ignore-patterns '**/*proxy-extra-usage-fallback*' --path-ignore-patterns '**/*models-auth-status*' --path-ignore-patterns '**/*proxy-context-usage-store*' --path-ignore-patterns '**/*proxy-passthrough-thinking*' --path-ignore-patterns '**/*profile-switch-integration*' --path-ignore-patterns '**/*session-recovery*' --path-ignore-patterns '**/*models.test*' --path-ignore-patterns '**/*proxy-health-degraded*' --path-ignore-patterns '**/*proxy-subagent-model-selection*' && bun test src/__tests__/profile-switch-integration.test.ts && bun test src/__tests__/proxy-extra-usage-fallback.test.ts && bun test src/__tests__/proxy-async-ops.test.ts && bun test src/__tests__/proxy-session-store.test.ts && bun test src/__tests__/session-store-pruning.test.ts && bun test src/__tests__/proxy-session-store-locking.test.ts && bun test src/__tests__/proxy-context-usage-store.test.ts && bun test src/__tests__/models-auth-status.test.ts && bun test src/__tests__/proxy-passthrough-thinking.test.ts && bun test src/__tests__/proxy-session-recovery.test.ts && bun test src/__tests__/models.test.ts && bun test src/__tests__/proxy-health-degraded.test.ts && bun test src/__tests__/proxy-subagent-model-selection.test.ts",
     "nix:lock": "bun2nix -o bun.nix",
@@ -30,7 +31,8 @@
     "proxy:direct": "bun run ./bin/cli.ts"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.2.89",
+    "@anthropic-ai/claude-agent-sdk": "^0.2.117",
+    "@anthropic-ai/claude-code": "^2.1.117",
     "libsql": "^0.5.29"
   },
   "devDependencies": {

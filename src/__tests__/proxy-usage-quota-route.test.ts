@@ -162,9 +162,10 @@ describe("GET /v1/usage/quota", () => {
       }),
       resetOAuthUsageCache: () => {},
     }))
-    // Re-import server with the new mock
-    const mod = await import("../proxy/server?merge-test")
-    const { app } = mod.createProxyServer({ port: 0, host: "127.0.0.1" })
+    // The createProxyServer factory captures `fetchOAuthUsage` lazily via
+    // ES module live binding, so the route picks up the new mock without
+    // needing to re-import.
+    const { app } = createProxyServer({ port: 0, host: "127.0.0.1" })
 
     // SDK has its own bucket for five_hour with overage info we want preserved.
     rateLimitStore.record({

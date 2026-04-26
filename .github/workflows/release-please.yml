@@ -52,7 +52,13 @@ jobs:
 
   publish:
     needs: release-please
-    if: ${{ always() && (needs.release-please.outputs.release_created || inputs.publish_only) }}
+    # release-please's `releases_created` output is a STRING ("true"/"false"),
+    # so a bare truthy check fires on every push (even when no release was
+    # created) and ends in E403 trying to re-publish the existing version.
+    # Compare to the literal 'true' string to only publish when release-please
+    # actually cut a release. publish_only is a real boolean from
+    # workflow_dispatch input, so it can stay as-is.
+    if: ${{ always() && (needs.release-please.outputs.release_created == 'true' || inputs.publish_only == true) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

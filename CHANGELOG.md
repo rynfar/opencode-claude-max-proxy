@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.39.1](https://github.com/rynfar/meridian/compare/meridian-v1.39.0...meridian-v1.39.1) (2026-04-26)
+
+
+### Bug Fixes
+
+* **detect:** MERIDIAN_DEFAULT_AGENT wins over claude-cli/* UA tiebreaker ([#433](https://github.com/rynfar/meridian/issues/433)) ([aa69984](https://github.com/rynfar/meridian/commit/aa69984b029a7b50ae906f40d44fa31b2391751f))
+
 ## [1.39.0](https://github.com/rynfar/meridian/compare/meridian-v1.38.0...meridian-v1.39.0) (2026-04-26)
 
 

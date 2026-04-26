@@ -5,6 +5,7 @@ import type { Server } from "node:http"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import { query } from "@anthropic-ai/claude-agent-sdk"
+import { rateLimitStore } from "./rateLimitStore"
 import type { Context } from "hono"
 import { DEFAULT_PROXY_CONFIG } from "./types"
 import { envBool } from "../env"
@@ -930,6 +931,12 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
                       : undefined,
                     advisorModel,
                   }))) {
+                    // Capture Claude Max subscription quota updates emitted by
+                    // the SDK as rate_limit_event. We snapshot them in a process-wide
+                    // store so /v1/usage/quota can return the latest live state.
+                    if ((event as any).type === "rate_limit_event") {
+                      rateLimitStore.record((event as any).rate_limit_info)
+                    }
                     // Only count real assistant content — not SDK error messages
                     // (which arrive as type:"assistant" with an error field set).
                     // Counting error assistants as content would prevent retries.
@@ -1371,6 +1378,10 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
                         : undefined,
                       advisorModel,
                     }))) {
+                      // Same SDK rate-limit capture as the non-stream path.
+                      if ((event as any).type === "rate_limit_event") {
+                        rateLimitStore.record((event as any).rate_limit_info)
+                      }
                       if ((event as any).type === "stream_event") {
                         didYieldClientEvent = true
                       }
@@ -2196,9 +2207,12 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
     }
     setActiveProfile(body.profile!)
     // Evict all cached SDK sessions — they were started under the old profile's
-    // credentials and cannot be reused with different auth.
+    // credentials and cannot be reused with different auth. Also drop the
+    // rate-limit snapshot so /v1/usage/quota doesn't return the previous
+    // profile's quotas under the new profile's identity.
     clearSessionCache()
-    console.error(`[PROXY] Active profile switched to: ${body.profile} (session cache cleared)`)
+    rateLimitStore.clear()
+    console.error(`[PROXY] Active profile switched to: ${body.profile} (session + rate-limit caches cleared)`)
     return c.json({ success: true, activeProfile: body.profile })
   })
 
@@ -2249,6 +2263,10 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
   app.post("/auth/refresh", async (c) => {
     const success = await refreshOAuthToken()
     if (success) {
+      // Drop the rate-limit snapshot — old quotas were observed under the
+      // previous credential and may belong to a different account if the
+      // refresh swapped profiles. The next SDK call repopulates.
+      rateLimitStore.clear()
       return c.json({ success: true, message: "OAuth token refreshed successfully" })
     }
     return c.json(
@@ -2358,6 +2376,40 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
     const authStatus = await getClaudeAuthStatusAsync()
     const isMax = authStatus?.subscriptionType === "max"
     return c.json({ object: "list", data: buildModelList(isMax) })
+  })
+
+  // --- Subscription Quota ---
+  // Returns the most recent SDK-reported quota state for the Claude Max
+  // subscription, broken down by rate-limit bucket (five_hour, seven_day,
+  // seven_day_opus, seven_day_sonnet, overage).
+  //
+  // Source: `rate_limit_event` events emitted by `@anthropic-ai/claude-agent-sdk`'s
+  // `query()` stream. We snapshot them as they arrive and serve the cache here.
+  // The `utilization` field is a 0..1 fraction directly from Anthropic; `resetsAt`
+  // is an epoch-ms timestamp.
+  //
+  // Returns 200 with `buckets: []` if no events have been observed yet (first
+  // call after proxy restart).
+  app.get("/v1/usage/quota", (c) => {
+    // Filter out the internal "default" bucket — it's a Meridian-side
+    // fallback for SDK events missing `rateLimitType`, not a real Anthropic
+    // bucket that consumers can render.
+    const entries = rateLimitStore.getAll().filter(entry => entry.rateLimitType !== undefined)
+    return c.json({
+      buckets: entries.map(entry => ({
+        type: entry.rateLimitType,
+        status: entry.status,
+        utilization: entry.utilization ?? null,
+        resetsAt: entry.resetsAt ?? null,
+        isUsingOverage: entry.isUsingOverage ?? false,
+        overageStatus: entry.overageStatus ?? null,
+        overageResetsAt: entry.overageResetsAt ?? null,
+        overageDisabledReason: entry.overageDisabledReason ?? null,
+        surpassedThreshold: entry.surpassedThreshold ?? null,
+        observedAt: entry.observedAt,
+      })),
+      asOf: Date.now(),
+    })
   })
 
   // Returns the last observed token usage for a session, looked up by the Claude

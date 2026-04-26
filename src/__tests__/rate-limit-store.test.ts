@@ -79,9 +79,12 @@ describe("rateLimitStore", () => {
     // Force monotonic observedAt — Bun's `Date.now()` resolution is fine here.
     await Bun.sleep(2)
     store.record(SEVEN_DAY)
-    const all = store.getAll()
-    expect(all[0].rateLimitType).toBe("seven_day")
-    expect(all[1].rateLimitType).toBe("five_hour")
+    // Compare the mapped sequence rather than indexing into the array directly
+    // so the test stays under TypeScript's `noUncheckedIndexedAccess` strict
+    // mode (which CI's `tsc --noEmit` enforces but Bun's lenient default tsc
+    // does not).
+    const orderedTypes = store.getAll().map(e => e.rateLimitType)
+    expect(orderedTypes).toEqual(["seven_day", "five_hour"])
   })
 
   it("clear() empties the store", () => {

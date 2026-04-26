@@ -15,9 +15,9 @@
  * or `~/.claude/.credentials.json`) to read the access token, and trigger a
  * background refresh on 401.
  *
- * The result is cached in-process for 30s by default to avoid hammering the
- * upstream when many clients poll concurrently. Clients should poll no more
- * than ~once per 30s.
+ * Per-profile caching: each profile has its own 30s TTL cache so multi-account
+ * setups can be queried independently without cross-contamination. Concurrent
+ * callers for the same profile share a single in-flight request.
  */
 
 import { claudeLog } from "../logger"
@@ -28,8 +28,8 @@ const OAUTH_BETA_HEADER = "oauth-2025-04-20"
 
 /** Raw shape returned by Anthropic. Most fields are optional/nullable. */
 interface RawOAuthWindow {
-  utilization?: number | null   // 0-100 (percentage)
-  resets_at?: string | null     // ISO 8601 with timezone
+  utilization?: number | null
+  resets_at?: string | null
 }
 
 interface RawOAuthExtraUsage {
@@ -53,11 +53,10 @@ interface RawOAuthUsageResponse {
   extra_usage?: RawOAuthExtraUsage | null
 }
 
-/** UI-facing normalized shape — utilization in 0..1 fraction, resetsAt in ms. */
 export interface OAuthUsageWindow {
-  type: string                  // "five_hour", "seven_day", ...
-  utilization: number | null    // 0..1
-  resetsAt: number | null       // epoch ms
+  type: string
+  utilization: number | null
+  resetsAt: number | null
 }
 
 export interface OAuthExtraUsageInfo {
@@ -71,14 +70,16 @@ export interface OAuthExtraUsageInfo {
 export interface OAuthUsageSnapshot {
   windows: OAuthUsageWindow[]
   extraUsage: OAuthExtraUsageInfo | null
-  fetchedAt: number             // epoch ms
+  fetchedAt: number
 }
 
 const CACHE_TTL_MS_DEFAULT = 30_000
-let cached: OAuthUsageSnapshot | null = null
-let inflight: Promise<OAuthUsageSnapshot | null> | null = null
 
-/** Window types we surface (in priority order). */
+/** Per-profile cache. Key = profileId (or DEFAULT_KEY for the unscoped default). */
+const cacheByProfile = new Map<string, OAuthUsageSnapshot>()
+const inflightByProfile = new Map<string, Promise<OAuthUsageSnapshot | null>>()
+const DEFAULT_KEY = "__default__"
+
 const WINDOW_TYPES: Array<keyof RawOAuthUsageResponse> = [
   "five_hour",
   "seven_day",
@@ -108,7 +109,6 @@ function buildSnapshot(raw: RawOAuthUsageResponse): OAuthUsageSnapshot {
     if (!w) continue
     const utilization = normalizeUtilization(w.utilization)
     const resetsAt = parseIsoToMs(w.resets_at)
-    // Only emit if we got at least one signal back.
     if (utilization === null && resetsAt === null) continue
     windows.push({ type: key as string, utilization, resetsAt })
   }
@@ -146,37 +146,53 @@ async function callAnthropic(token: string, signal?: AbortSignal): Promise<RawOA
 }
 
 /**
- * Fetch latest OAuth usage. Returns null if no OAuth token is available or
- * the upstream call fails (after one refresh attempt). Cached in-process for
- * 30s to avoid hammering Anthropic's endpoint.
+ * Fetch latest OAuth usage for a specific profile (or the default OAuth
+ * account if none specified). Returns null if no OAuth token is available
+ * or the upstream call fails (after one refresh attempt).
  *
- * Concurrent callers share a single in-flight request.
+ * Per-profile in-process cache (30s TTL by default) prevents hammering
+ * Anthropic's endpoint when many clients poll concurrently. Concurrent
+ * callers for the same profile share a single in-flight request.
  *
- * @param ttlMs Override the cache TTL (default 30s).
- * @param force Bypass the cache and fetch fresh.
- * @param store Override the credential store (for testing).
+ * @param ttlMs           Override the cache TTL (default 30s).
+ * @param force           Bypass the cache and fetch fresh.
+ * @param store           Override the credential store (for testing).
+ * @param profileId       Logical profile identifier used as the cache key.
+ *                        Pass null/undefined for the default OAuth account.
+ * @param claudeConfigDir When provided, reads credentials from this dir's
+ *                        keychain entry (macOS) or `.credentials.json`
+ *                        (Linux) instead of the platform default.
  */
-export async function fetchOAuthUsage(opts?: { ttlMs?: number; force?: boolean; store?: CredentialStore }): Promise<OAuthUsageSnapshot | null> {
+export async function fetchOAuthUsage(opts?: {
+  ttlMs?: number
+  force?: boolean
+  store?: CredentialStore
+  profileId?: string | null
+  claudeConfigDir?: string
+}): Promise<OAuthUsageSnapshot | null> {
   const ttl = opts?.ttlMs ?? CACHE_TTL_MS_DEFAULT
-  if (!opts?.force && cached && Date.now() - cached.fetchedAt < ttl) {
-    return cached
+  const cacheKey = opts?.profileId ?? DEFAULT_KEY
+
+  if (!opts?.force) {
+    const cached = cacheByProfile.get(cacheKey)
+    if (cached && Date.now() - cached.fetchedAt < ttl) return cached
   }
-  if (inflight) return inflight
+  const existing = inflightByProfile.get(cacheKey)
+  if (existing) return existing
 
-  const store = opts?.store ?? createPlatformCredentialStore()
+  const store = opts?.store ?? createPlatformCredentialStore({ claudeConfigDir: opts?.claudeConfigDir })
 
-  inflight = (async () => {
+  const promise = (async () => {
     try {
       const token = await readAccessToken(store)
       if (!token) return null
 
       let result = await callAnthropic(token)
-      // 401 → token expired or revoked; try one refresh + retry.
       if ("__status" in result && result.__status === 401) {
-        claudeLog("oauth_usage.token_refresh_attempt", {})
+        claudeLog("oauth_usage.token_refresh_attempt", { profile: cacheKey })
         const refreshed = await refreshOAuthToken(store)
         if (!refreshed) {
-          claudeLog("oauth_usage.refresh_failed", {})
+          claudeLog("oauth_usage.refresh_failed", { profile: cacheKey })
           return null
         }
         const newToken = await readAccessToken(store)
@@ -184,26 +200,27 @@ export async function fetchOAuthUsage(opts?: { ttlMs?: number; force?: boolean; 
         result = await callAnthropic(newToken)
       }
       if ("__status" in result) {
-        claudeLog("oauth_usage.upstream_error", { status: result.__status })
+        claudeLog("oauth_usage.upstream_error", { profile: cacheKey, status: result.__status })
         return null
       }
 
       const snapshot = buildSnapshot(result)
-      cached = snapshot
+      cacheByProfile.set(cacheKey, snapshot)
       return snapshot
     } catch (err) {
-      claudeLog("oauth_usage.fetch_failed", { error: err instanceof Error ? err.message : String(err) })
+      claudeLog("oauth_usage.fetch_failed", { profile: cacheKey, error: err instanceof Error ? err.message : String(err) })
       return null
     } finally {
-      inflight = null
+      inflightByProfile.delete(cacheKey)
     }
   })()
 
-  return inflight
+  inflightByProfile.set(cacheKey, promise)
+  return promise
 }
 
-/** Test-only helper. */
+/** Test-only / shutdown helper — clears all cached snapshots and pending fetches. */
 export function resetOAuthUsageCache(): void {
-  cached = null
-  inflight = null
+  cacheByProfile.clear()
+  inflightByProfile.clear()
 }

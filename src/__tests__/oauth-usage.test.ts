@@ -154,6 +154,50 @@ describe("oauthUsage", () => {
     expect(calls).toBe(2)
   })
 
+  test("per-profile cache: distinct profileIds get separate cache entries", async () => {
+    let calls = 0
+    mockFetchImpl = async () => {
+      calls++
+      return new Response(JSON.stringify({
+        five_hour: { utilization: 10 + calls, resets_at: "2026-04-26T22:30:00Z" },
+      }), { status: 200 })
+    }
+    const a = await fetchOAuthUsage({ force: true, store: makeStore("tA"), profileId: "personal" })
+    const b = await fetchOAuthUsage({ force: true, store: makeStore("tB"), profileId: "work" })
+    expect(calls).toBe(2)
+    expect(a!.windows[0]!.utilization).not.toBe(b!.windows[0]!.utilization)
+
+    // Subsequent reads hit the per-profile cache, not the network.
+    const aAgain = await fetchOAuthUsage({ profileId: "personal" })
+    const bAgain = await fetchOAuthUsage({ profileId: "work" })
+    expect(calls).toBe(2)
+    expect(aAgain).toBe(a)
+    expect(bAgain).toBe(b)
+  })
+
+  test("per-profile cache: same profileId across calls shares cache", async () => {
+    let calls = 0
+    mockFetchImpl = async () => {
+      calls++
+      return new Response(JSON.stringify(SAMPLE_RESPONSE), { status: 200 })
+    }
+    const r1 = await fetchOAuthUsage({ force: true, store: makeStore("t"), profileId: "personal" })
+    const r2 = await fetchOAuthUsage({ profileId: "personal" })
+    expect(calls).toBe(1)
+    expect(r2).toBe(r1)
+  })
+
+  test("profileId null behaves as the default account, distinct from named profiles", async () => {
+    let calls = 0
+    mockFetchImpl = async () => {
+      calls++
+      return new Response(JSON.stringify(SAMPLE_RESPONSE), { status: 200 })
+    }
+    await fetchOAuthUsage({ force: true, store: makeStore("d") })  // no profileId → default key
+    await fetchOAuthUsage({ force: true, store: makeStore("p"), profileId: "personal" })
+    expect(calls).toBe(2)
+  })
+
   test("ISO date with timezone parses correctly to UTC ms", async () => {
     const iso = "2026-04-26T22:30:00.221857+00:00"
     mockFetchImpl = async () => new Response(JSON.stringify({

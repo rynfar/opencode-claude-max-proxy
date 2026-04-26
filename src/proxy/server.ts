@@ -2393,8 +2393,10 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
   // call after proxy restart).
   app.get("/v1/usage/quota", async (c) => {
     // Two data sources, merged:
-    //   - OAuth usage API (continuous % via Anthropic's private endpoint)
-    //   - SDK rate_limit_event store (overage info, threshold-gated %)
+    //   - OAuth usage API (continuous % via Anthropic's private endpoint,
+    //     profile-scoped — reads credentials from the active profile's
+    //     CLAUDE_CONFIG_DIR so multi-account setups don't cross-contaminate).
+    //   - SDK rate_limit_event store (overage info, threshold-gated %).
     //
     // Strategy: build a bucket per known type. OAuth-sourced fields
     // (`utilization`, `resetsAt`) win when present — they're always
@@ -2405,7 +2407,25 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
     // fallback for SDK events missing `rateLimitType`, not a real Anthropic
     // bucket that consumers can render.
     const sdkEntries = rateLimitStore.getAll().filter(entry => entry.rateLimitType !== undefined)
-    const oauth = await fetchOAuthUsage()
+
+    // Determine which profile we're querying:
+    //   1. Explicit ?profile=<id> query param
+    //   2. Active profile (set via UI / POST /profiles/active)
+    //   3. First configured profile
+    //   4. Default OAuth account (no claudeConfigDir override)
+    const requestedProfile = c.req.query("profile")
+    const profilesList = getEffectiveProfiles(finalConfig.profiles)
+    const targetProfileId = requestedProfile
+      || getActiveProfileId()
+      || finalConfig.defaultProfile
+      || profilesList[0]?.id
+      || null
+    const targetProfile = targetProfileId ? profilesList.find(p => p.id === targetProfileId) : undefined
+
+    const oauth = await fetchOAuthUsage({
+      profileId: targetProfileId ?? undefined,
+      claudeConfigDir: targetProfile?.claudeConfigDir,
+    })
 
     type Bucket = {
       type: string
@@ -2464,12 +2484,80 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
     }
 
     return c.json({
+      profile: targetProfileId ?? null,
       buckets: Array.from(byType.values()),
       extraUsage: oauth?.extraUsage ?? null,
       sources: {
         oauth: oauth ? { fetchedAt: oauth.fetchedAt } : null,
         sdk: { entryCount: sdkEntries.length },
       },
+      asOf: Date.now(),
+    })
+  })
+
+  // All-profiles aggregate — returns OAuth usage for every configured profile
+  // in parallel, each with its own per-profile cache. Used by the Meridian
+  // settings UI to render a multi-account usage panel.
+  //
+  // Pylon and other single-profile clients should keep using `/v1/usage/quota`
+  // (which returns only the active profile's data).
+  //
+  // Each profile entry includes the same shape as `/v1/usage/quota`'s top
+  // level (windows + extraUsage), or `error: "no_token" | "upstream_error"`
+  // when the fetch failed for that profile.
+  app.get("/v1/usage/quota/all", async (c) => {
+    const profilesList = getEffectiveProfiles(finalConfig.profiles)
+    const activeId = getActiveProfileId() || finalConfig.defaultProfile || profilesList[0]?.id || null
+
+    if (profilesList.length === 0) {
+      // Single-account mode — just return the default OAuth account's data.
+      const oauth = await fetchOAuthUsage({})
+      return c.json({
+        profiles: [{
+          id: "default",
+          isActive: true,
+          windows: oauth?.windows ?? [],
+          extraUsage: oauth?.extraUsage ?? null,
+          fetchedAt: oauth?.fetchedAt ?? null,
+          error: oauth ? null : "no_token",
+        }],
+        activeProfile: "default",
+        asOf: Date.now(),
+      })
+    }
+
+    const results = await Promise.all(profilesList.map(async (p) => {
+      // Skip API-key profiles — OAuth usage endpoint only applies to Claude Max OAuth.
+      const type = p.type ?? "claude-max"
+      if (type !== "claude-max") {
+        return {
+          id: p.id,
+          isActive: p.id === activeId,
+          type,
+          windows: [] as any[],
+          extraUsage: null,
+          fetchedAt: null,
+          error: "not_oauth" as const,
+        }
+      }
+      const oauth = await fetchOAuthUsage({
+        profileId: p.id,
+        claudeConfigDir: p.claudeConfigDir,
+      })
+      return {
+        id: p.id,
+        isActive: p.id === activeId,
+        type,
+        windows: oauth?.windows ?? [],
+        extraUsage: oauth?.extraUsage ?? null,
+        fetchedAt: oauth?.fetchedAt ?? null,
+        error: oauth ? null : "no_token",
+      }
+    }))
+
+    return c.json({
+      profiles: results,
+      activeProfile: activeId,
       asOf: Date.now(),
     })
   })

@@ -15,8 +15,10 @@
  */
 
 import { execFile as execFileCb } from "child_process"
-import { existsSync, readFileSync, writeFileSync } from "fs"
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs"
 import { homedir, platform, userInfo } from "os"
+import { join, dirname, resolve } from "path"
+import { createHash } from "crypto"
 import { promisify } from "util"
 import { claudeLog } from "../logger"
 
@@ -26,6 +28,28 @@ const OAUTH_TOKEN_URL = "https://platform.claude.com/v1/oauth/token"
 const OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 const KEYCHAIN_SERVICE = "Claude Code-credentials"
 const CREDENTIALS_FILE = `${homedir()}/.claude/.credentials.json`
+const DEFAULT_CLAUDE_DIR = `${homedir()}/.claude`
+
+/**
+ * Map a `claudeConfigDir` to the keychain service name claude-code uses
+ * for that directory.
+ *
+ * Default `~/.claude` uses the bare service name `Claude Code-credentials`.
+ * Any other directory uses `Claude Code-credentials-<sha256(absPath).slice(0,8)>` —
+ * matching claude-code's own convention so we can read OAuth tokens for
+ * additional Meridian profiles without prompting the user.
+ */
+export function configDirToKeychainService(claudeConfigDir: string): string {
+  const abs = resolve(claudeConfigDir)
+  if (abs === resolve(DEFAULT_CLAUDE_DIR)) return KEYCHAIN_SERVICE
+  const hash = createHash("sha256").update(abs).digest("hex").slice(0, 8)
+  return `${KEYCHAIN_SERVICE}-${hash}`
+}
+
+/** Map `claudeConfigDir` to the file-based credentials path. */
+export function configDirToCredentialsFile(claudeConfigDir: string): string {
+  return join(resolve(claudeConfigDir), ".credentials.json")
+}
 
 interface OAuthCredentials {
   accessToken: string
@@ -74,76 +98,104 @@ function parseKeychainValue(raw: string): { credentials: CredentialsFile; wasHex
 }
 
 // Track encoding format across read → write within the same refresh call.
-let keychainWasHex = false
+// Keyed by service name so per-profile stores don't clobber each other.
+const keychainWasHexByService = new Map<string, boolean>()
 
-const macosStore: CredentialStore = {
-  async read() {
-    try {
-      const { stdout } = await execFile(
-        "/usr/bin/security",
-        ["find-generic-password", "-s", KEYCHAIN_SERVICE, "-a", userInfo().username, "-w"],
-        { timeout: 5000 }
-      )
-      const parsed = parseKeychainValue(stdout)
-      if (!parsed) throw new Error("Could not parse keychain value as JSON or hex-encoded JSON")
-      keychainWasHex = parsed.wasHex
-      return parsed.credentials
-    } catch (err) {
-      claudeLog("token_refresh.keychain_read_failed", { error: String(err) })
-      return null
-    }
-  },
+function buildMacosStore(serviceName: string): CredentialStore {
+  return {
+    async read() {
+      try {
+        const { stdout } = await execFile(
+          "/usr/bin/security",
+          ["find-generic-password", "-s", serviceName, "-a", userInfo().username, "-w"],
+          { timeout: 5000 }
+        )
+        const parsed = parseKeychainValue(stdout)
+        if (!parsed) throw new Error("Could not parse keychain value as JSON or hex-encoded JSON")
+        keychainWasHexByService.set(serviceName, parsed.wasHex)
+        return parsed.credentials
+      } catch (err) {
+        claudeLog("token_refresh.keychain_read_failed", { service: serviceName, error: String(err) })
+        return null
+      }
+    },
 
-  async write(credentials) {
-    const json = JSON.stringify(credentials, null, 2)
-    // Write back in the same encoding Claude Code expects — hex after `claude login`.
-    const value = keychainWasHex ? Buffer.from(json).toString("hex") : json
-    try {
-      // Pass value directly as argument — no shell interpolation, no escaping.
-      await execFile(
-        "/usr/bin/security",
-        ["add-generic-password", "-U", "-s", KEYCHAIN_SERVICE, "-a", userInfo().username, "-w", value],
-        { timeout: 5000 }
-      )
-      return true
-    } catch (err) {
-      claudeLog("token_refresh.keychain_write_failed", { error: String(err) })
-      return false
-    }
-  },
+    async write(credentials) {
+      const json = JSON.stringify(credentials, null, 2)
+      const wasHex = keychainWasHexByService.get(serviceName) ?? false
+      // Write back in the same encoding Claude Code expects — hex after `claude login`.
+      const value = wasHex ? Buffer.from(json).toString("hex") : json
+      try {
+        await execFile(
+          "/usr/bin/security",
+          ["add-generic-password", "-U", "-s", serviceName, "-a", userInfo().username, "-w", value],
+          { timeout: 5000 }
+        )
+        return true
+      } catch (err) {
+        claudeLog("token_refresh.keychain_write_failed", { service: serviceName, error: String(err) })
+        return false
+      }
+    },
+  }
 }
+
+const macosStore: CredentialStore = buildMacosStore(KEYCHAIN_SERVICE)
 
 // ---------------------------------------------------------------------------
 // Linux / file backend
 // ---------------------------------------------------------------------------
 
-const fileStore: CredentialStore = {
-  async read() {
-    try {
-      if (!existsSync(CREDENTIALS_FILE)) return null
-      return JSON.parse(readFileSync(CREDENTIALS_FILE, "utf-8")) as CredentialsFile
-    } catch (err) {
-      claudeLog("token_refresh.file_read_failed", { error: String(err) })
-      return null
-    }
-  },
+function buildFileStore(filePath: string): CredentialStore {
+  return {
+    async read() {
+      try {
+        if (!existsSync(filePath)) return null
+        return JSON.parse(readFileSync(filePath, "utf-8")) as CredentialsFile
+      } catch (err) {
+        claudeLog("token_refresh.file_read_failed", { path: filePath, error: String(err) })
+        return null
+      }
+    },
 
-  async write(credentials) {
-    try {
-      writeFileSync(CREDENTIALS_FILE, JSON.stringify(credentials, null, 2), "utf-8")
-      return true
-    } catch (err) {
-      claudeLog("token_refresh.file_write_failed", { error: String(err) })
-      return false
-    }
-  },
+    async write(credentials) {
+      try {
+        // Ensure parent dir exists for non-default paths.
+        mkdirSync(dirname(filePath), { recursive: true })
+        writeFileSync(filePath, JSON.stringify(credentials, null, 2), "utf-8")
+        return true
+      } catch (err) {
+        claudeLog("token_refresh.file_write_failed", { path: filePath, error: String(err) })
+        return false
+      }
+    },
+  }
 }
+
+
+const fileStore: CredentialStore = buildFileStore(CREDENTIALS_FILE)
 
 /**
  * Returns the appropriate credential store for the current platform.
+ *
+ * If `claudeConfigDir` is provided, returns a profile-specific store that
+ * reads from the matching keychain entry (macOS) or `<dir>/.credentials.json`
+ * (Linux). Default behaviour (no opts) is unchanged — reads from the
+ * standard `~/.claude` location.
  */
-export function createPlatformCredentialStore(): CredentialStore {
+export function createPlatformCredentialStore(opts?: { claudeConfigDir?: string }): CredentialStore {
+  if (opts?.claudeConfigDir) {
+    if (platform() === "darwin") {
+      return buildMacosStore(configDirToKeychainService(opts.claudeConfigDir))
+    }
+    return buildFileStore(configDirToCredentialsFile(opts.claudeConfigDir))
+  }
   return platform() === "darwin" ? macosStore : fileStore
+}
+
+/** Look up the appropriate file path for a profile (Linux convention even on macOS for inspection). */
+export function credentialsFilePathForProfile(claudeConfigDir?: string): string {
+  return claudeConfigDir ? configDirToCredentialsFile(claudeConfigDir) : CREDENTIALS_FILE
 }
 
 // ---------------------------------------------------------------------------

@@ -32,7 +32,11 @@ export const CLAUDE_CODE_ONLY_TOOLS = [
   "ExitPlanMode",      // Claude Code mode switching
   "EnterWorktree",     // Claude Code git worktree management
   "ExitWorktree",      // Claude Code git worktree management
+  "Monitor",           // Claude Code background-process monitoring
   "NotebookEdit",      // Jupyter notebook editing
+  "PushNotification",  // Claude Code push-notification delivery
+  "RemoteTrigger",     // Claude Code remote-trigger plumbing
+  "ScheduleWakeup",    // Claude Code self-paced loop scheduling
   // Schema-incompatible: SDK tool name differs from OpenCode's.
   // If Claude calls the SDK version, OpenCode won't recognize it.
   // Block the SDK's so Claude only sees OpenCode's definitions.

@@ -28,6 +28,10 @@ describe("tool configuration", () => {
     expect(CLAUDE_CODE_ONLY_TOOLS).not.toContain("ToolSearch")
     expect(CLAUDE_CODE_ONLY_TOOLS).toContain("EnterPlanMode")
     expect(CLAUDE_CODE_ONLY_TOOLS).toContain("EnterWorktree")
+    expect(CLAUDE_CODE_ONLY_TOOLS).toContain("Monitor")
+    expect(CLAUDE_CODE_ONLY_TOOLS).toContain("PushNotification")
+    expect(CLAUDE_CODE_ONLY_TOOLS).toContain("RemoteTrigger")
+    expect(CLAUDE_CODE_ONLY_TOOLS).toContain("ScheduleWakeup")
   })
 
   it("MCP_SERVER_NAME is opencode", () => {

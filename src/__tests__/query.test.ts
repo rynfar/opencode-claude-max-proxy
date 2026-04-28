@@ -50,17 +50,17 @@ describe("buildQueryOptions", () => {
     expect((result.options as any).includePartialMessages).toBe(true)
   })
 
-  it("sets maxTurns to 2 in passthrough mode (needs 2 turns for blocked-tool handoff)", () => {
+  it("sets maxTurns to 3 in passthrough mode (thinking + tool_use + handoff fits in 3 turns)", () => {
     const result = buildQueryOptions(makeContext({ passthrough: true }))
-    expect(result.options.maxTurns).toBe(2)
+    expect(result.options.maxTurns).toBe(3)
   })
 
-  it("sets maxTurns to 3 in passthrough mode with resume (extra turn for session rehydration)", () => {
+  it("sets maxTurns to 3 in passthrough mode with resume (rehydration fits within base budget)", () => {
     const result = buildQueryOptions(makeContext({ passthrough: true, resumeSessionId: "sess-123" }))
     expect(result.options.maxTurns).toBe(3)
   })
 
-  it("sets maxTurns to 3 in passthrough mode with deferred tools (extra turn for ToolSearch)", () => {
+  it("sets maxTurns to 3 in passthrough mode with deferred tools (ToolSearch fits within base budget)", () => {
     const result = buildQueryOptions(makeContext({ passthrough: true, hasDeferredTools: true }))
     expect(result.options.maxTurns).toBe(3)
   })
@@ -74,9 +74,9 @@ describe("buildQueryOptions", () => {
     expect(result.options.maxTurns).toBe(4)
   })
 
-  it("sets maxTurns to 5 in passthrough mode with advisor (base 2 + 3 for advisor call/result/answer)", () => {
+  it("sets maxTurns to 6 in passthrough mode with advisor (base 3 + 3 for advisor call/result/answer)", () => {
     const result = buildQueryOptions(makeContext({ passthrough: true, advisorModel: "claude-opus-4-7" }))
-    expect(result.options.maxTurns).toBe(5)
+    expect(result.options.maxTurns).toBe(6)
   })
 
   it("sets maxTurns to 6 in passthrough mode with advisor + resume", () => {

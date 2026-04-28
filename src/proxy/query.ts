@@ -106,13 +106,17 @@ export interface BuildQueryResult {
  *
  * Compute maxTurns based on which SDK features are active. Each phase the SDK
  * walks before returning control to the host costs a turn:
- *   - Base (2): turn 1 generates tool_use blocks (captured by PreToolUse hook),
- *     turn 2 processes the blocked-tool handoff. maxTurns: 1 throws "Reached
- *     maximum number of turns (1)" before the response completes → HTTP 500.
- *   - Resume (+1): SDK spends a turn rehydrating session state.
- *   - Deferred tools (+1): ToolSearch consumes a turn before the real tool call.
- *   - Both resume and deferred tools: each consumes its own turn, so the base
- *     budget becomes 4 rather than 3.
+ *   - Base (3): turn 1 generates content (extended thinking + tool_use blocks
+ *     captured by PreToolUse hook); turn 2 receives the deny and may emit a
+ *     follow-up (text or further tool_use); turn 3 wraps the stream cleanly.
+ *     Was 2 historically — bumped after telemetry showed opus[1m] requests with
+ *     thinking + tool_use exhausting the 2-turn budget mid-handoff and returning
+ *     500s on fresh (non-resume) requests. See errors.ts sdk_termination
+ *     diagnostic + telemetry.
+ *   - Resume / deferred (no extra turn over base): both fit within the 3-turn
+ *     budget. Resume rehydration and ToolSearch lookups complete inside turn 1.
+ *   - Both resume and deferred (+1): a second prelude phase pushes one phase
+ *     out, so budget becomes 4.
  *   - Advisor (+3): server-side advisor executes call + result + final answer.
  */
 function computePassthroughMaxTurns(
@@ -121,7 +125,7 @@ function computePassthroughMaxTurns(
   advisorModel: string | undefined,
 ): number {
   const hasResume = !!resumeSessionId
-  const base = hasResume && hasDeferredTools ? 4 : (hasResume || hasDeferredTools) ? 3 : 2
+  const base = hasResume && hasDeferredTools ? 4 : 3
   const advisorBump = advisorModel ? 3 : 0
   return base + advisorBump
 }

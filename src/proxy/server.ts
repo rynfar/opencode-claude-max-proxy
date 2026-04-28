@@ -41,7 +41,7 @@ import { LRUMap } from "../utils/lruMap"
 
 import { telemetryStore, diagnosticLog, createTelemetryRoutes, landingHtml, renderPrometheusMetrics } from "../telemetry"
 import type { RequestMetric } from "../telemetry"
-import { classifyError, isStaleSessionError, isRateLimitError, isExtraUsageRequiredError, isExpiredTokenError } from "./errors"
+import { classifyError, extractSdkTermination, formatSdkTermination, isStaleSessionError, isRateLimitError, isExtraUsageRequiredError, isExpiredTokenError } from "./errors"
 import { refreshOAuthToken } from "./tokenRefresh"
 import { checkPluginConfigured } from "./setup"
 import { mapModelToClaudeModel, resolveClaudeExecutableAsync, resolveSdkModelDefaults, isClosedControllerError, getClaudeAuthStatusAsync, getAuthCacheInfo, hasExtendedContext, stripExtendedContext, recordExtendedContextUnavailable } from "./models"
@@ -1969,6 +1969,53 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
               const streamErr = classifyError(errMsg)
               claudeLog("proxy.anthropic.error", { error: errMsg, classified: streamErr.type })
 
+              // Surface the SDK termination reason (max_turns / process_exit / aborted)
+              // and stderr tail to /telemetry/logs?category=error so failures are
+              // visible without trawling raw log files.
+              const sdkTerm = extractSdkTermination(errMsg)
+              diagnosticLog.error(
+                `${requestMeta.requestId} ${formatSdkTermination(sdkTerm, {
+                  model,
+                  requestSource,
+                  isResume,
+                  hasDeferredTools,
+                  sdkSessionId: resumeSessionId,
+                })}`,
+                requestMeta.requestId,
+              )
+
+              // Record the failed request in the telemetry store. Without this,
+              // streaming errors would not appear in /telemetry/requests at all
+              // (the success path's record call never runs when this catch fires).
+              const streamErrTotalMs = Date.now() - requestStartAt
+              const streamErrQueueWaitMs = requestMeta.queueStartedAt - requestMeta.queueEnteredAt
+              telemetryStore.record({
+                requestId: requestMeta.requestId,
+                timestamp: Date.now(),
+                adapter: adapter.name,
+                requestSource,
+                model,
+                requestModel: body.model || undefined,
+                mode: "stream",
+                isResume,
+                isPassthrough: passthrough,
+                hasDeferredTools,
+                deferredToolCount: hasDeferredTools ? deferredToolCount : undefined,
+                toolCount,
+                lineageType,
+                messageCount: allMessages.length,
+                sdkSessionId: resumeSessionId,
+                status: streamErr.status,
+                queueWaitMs: streamErrQueueWaitMs,
+                proxyOverheadMs: upstreamStartAt - requestStartAt - streamErrQueueWaitMs,
+                ttfbMs: firstChunkAt ? firstChunkAt - upstreamStartAt : null,
+                upstreamDurationMs: Date.now() - upstreamStartAt,
+                totalDurationMs: streamErrTotalMs,
+                contentBlocks: eventsForwarded,
+                textEvents: textEventsForwarded,
+                error: streamErr.type,
+              })
+
               // If we already emitted message_start, close the message cleanly so
               // clients that access usage.input_tokens don't crash on the incomplete response.
               if (messageStartEmitted) {
@@ -2016,6 +2063,17 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
         const classified = classifyError(errMsg)
 
         claudeLog("proxy.error", { error: errMsg, classified: classified.type })
+
+        // Surface the SDK termination reason. Outer-catch context is limited —
+        // model/isResume/etc. may not be assigned yet if the error fired early —
+        // so include only the request-source header (resolved before any work).
+        const sdkTerm = extractSdkTermination(errMsg)
+        diagnosticLog.error(
+          `${requestMeta.requestId} ${formatSdkTermination(sdkTerm, {
+            requestSource: c.req.header("x-meridian-source")?.slice(0, 64) || undefined,
+          })}`,
+          requestMeta.requestId,
+        )
 
         const errorQueueWaitMs = requestMeta.queueStartedAt - requestMeta.queueEnteredAt
         telemetryStore.record({

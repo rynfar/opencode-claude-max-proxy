@@ -171,3 +171,123 @@ export function isExtraUsageRequiredError(errMsg: string): boolean {
   const lower = errMsg.toLowerCase()
   return lower.includes("extra usage") && lower.includes("1m")
 }
+
+/**
+ * Structured SDK-termination metadata extracted from raw error text.
+ * Used by diagnosticLog to surface why the SDK subprocess ended (max_turns,
+ * exit, abort) plus the captured stderr tail — info that classifyError
+ * collapses into a generic api_error.
+ */
+export interface SdkTermination {
+  reason: "max_turns" | "process_exit" | "aborted" | "unknown"
+  /** Turn count when reason=max_turns and parseable. */
+  turns?: number
+  /** Exit code when reason=process_exit and parseable. */
+  exitCode?: number
+  /** Captured "Subprocess stderr: …" tail (truncated). */
+  stderrTail?: string
+  /** Truncated raw error message — set only when reason="unknown" so the log
+   *  line stays self-contained for unrecognized SDK errors (e.g. so we can
+   *  add a new pattern next time). */
+  rawTail?: string
+}
+
+const STDERR_TAIL_MAX = 500
+const RAW_TAIL_MAX = 300
+
+function extractStderrTail(errMsg: string): string | undefined {
+  const marker = "Subprocess stderr:"
+  const idx = errMsg.indexOf(marker)
+  if (idx < 0) return undefined
+  const tail = errMsg.slice(idx + marker.length).trim()
+  if (!tail) return undefined
+  return tail.length > STDERR_TAIL_MAX ? tail.slice(0, STDERR_TAIL_MAX) : tail
+}
+
+function makeRawTail(errMsg: string): string | undefined {
+  // Strip the stderr appendix; we already log it separately as stderrTail.
+  const marker = "Subprocess stderr:"
+  const idx = errMsg.indexOf(marker)
+  const head = (idx >= 0 ? errMsg.slice(0, idx) : errMsg).trim()
+  if (!head) return undefined
+  return head.length > RAW_TAIL_MAX ? head.slice(0, RAW_TAIL_MAX) : head
+}
+
+/**
+ * Parse the raw error message thrown by the Claude Agent SDK into structured
+ * termination metadata. Pure function — no I/O.
+ *
+ * Returns reason="unknown" when the message doesn't match any recognized
+ * pattern; callers can still log it with whatever surrounding context they have.
+ */
+export function extractSdkTermination(errMsg: string): SdkTermination {
+  const stderrTail = extractStderrTail(errMsg)
+
+  // Look at both the wrapper text and the stderr tail when classifying
+  // (the SDK sometimes emits the operative phrase only into stderr).
+  const haystack = `${errMsg}\n${stderrTail ?? ""}`
+  const lower = haystack.toLowerCase()
+
+  if (lower.includes("reached maximum number of turns")) {
+    const m = haystack.match(/Reached maximum number of turns \((\d+)\)/i)
+    return {
+      reason: "max_turns",
+      ...(m ? { turns: Number(m[1]) } : {}),
+      ...(stderrTail ? { stderrTail } : {}),
+    }
+  }
+
+  if (lower.includes("exited with code") || lower.includes("process exited")) {
+    const m = haystack.match(/exited with code (\d+)/i)
+    return {
+      reason: "process_exit",
+      ...(m ? { exitCode: Number(m[1]) } : {}),
+      ...(stderrTail ? { stderrTail } : {}),
+    }
+  }
+
+  if (lower.includes("aborterror") || /\baborted\b/.test(lower)) {
+    return {
+      reason: "aborted",
+      ...(stderrTail ? { stderrTail } : {}),
+    }
+  }
+
+  const rawTail = makeRawTail(errMsg)
+  return {
+    reason: "unknown",
+    ...(stderrTail ? { stderrTail } : {}),
+    ...(rawTail ? { rawTail } : {}),
+  }
+}
+
+/**
+ * Render an SdkTermination plus request context as a single greppable log line.
+ * Matches the key=value style used by token-health diagnostic messages so all
+ * /telemetry/logs entries are uniform.
+ *
+ * Session IDs are truncated to 8 chars to keep lines short — full IDs are
+ * already on the parent telemetry record.
+ */
+export function formatSdkTermination(
+  t: SdkTermination,
+  ctx: {
+    model?: string
+    requestSource?: string
+    isResume?: boolean
+    hasDeferredTools?: boolean
+    sdkSessionId?: string
+  },
+): string {
+  const parts: string[] = [`reason=${t.reason}`]
+  if (t.turns !== undefined) parts.push(`turns=${t.turns}`)
+  if (t.exitCode !== undefined) parts.push(`exit=${t.exitCode}`)
+  if (ctx.model) parts.push(`model=${ctx.model}`)
+  if (ctx.requestSource) parts.push(`source=${ctx.requestSource}`)
+  if (ctx.isResume !== undefined) parts.push(`resume=${ctx.isResume}`)
+  if (ctx.hasDeferredTools !== undefined) parts.push(`deferred=${ctx.hasDeferredTools}`)
+  if (ctx.sdkSessionId) parts.push(`session=${ctx.sdkSessionId.slice(0, 8)}`)
+  if (t.rawTail) parts.push(`raw=${JSON.stringify(t.rawTail)}`)
+  if (t.stderrTail) parts.push(`stderr=${JSON.stringify(t.stderrTail)}`)
+  return `sdk_termination ${parts.join(" ")}`
+}

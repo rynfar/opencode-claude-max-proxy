@@ -2,7 +2,7 @@
  * Unit tests for classifyError — pure function, no mocks needed.
  */
 import { describe, it, expect } from "bun:test"
-import { classifyError, isStaleSessionError, isExtraUsageRequiredError } from "../proxy/errors"
+import { classifyError, isStaleSessionError, isExtraUsageRequiredError, extractSdkTermination, formatSdkTermination } from "../proxy/errors"
 
 describe("classifyError", () => {
   describe("authentication errors", () => {
@@ -220,5 +220,175 @@ describe("classifyError", () => {
       expect(result.status).toBe(500)
       expect(result.message).toBe("Unknown error")
     })
+  })
+})
+
+describe("extractSdkTermination", () => {
+  describe("max_turns", () => {
+    it("detects bare max_turns message", () => {
+      const t = extractSdkTermination("Reached maximum number of turns (3)")
+      expect(t.reason).toBe("max_turns")
+      expect(t.turns).toBe(3)
+    })
+
+    it("detects max_turns inside SDK wrapper", () => {
+      const t = extractSdkTermination("Claude Code returned an error result: Reached maximum number of turns (3)")
+      expect(t.reason).toBe("max_turns")
+      expect(t.turns).toBe(3)
+    })
+
+    it("captures any turn count, not just 3", () => {
+      const t = extractSdkTermination("Reached maximum number of turns (12)")
+      expect(t.reason).toBe("max_turns")
+      expect(t.turns).toBe(12)
+    })
+
+    it("returns max_turns reason even when turn count is malformed", () => {
+      const t = extractSdkTermination("Reached maximum number of turns")
+      expect(t.reason).toBe("max_turns")
+      expect(t.turns).toBeUndefined()
+    })
+
+    it("captures subprocess stderr tail when present", () => {
+      const msg =
+        "Claude Code returned an error result: Reached maximum number of turns (3)\n" +
+        "Subprocess stderr: Warning: Custom betas are only available for API key users. Ignoring provided betas."
+      const t = extractSdkTermination(msg)
+      expect(t.reason).toBe("max_turns")
+      expect(t.turns).toBe(3)
+      expect(t.stderrTail).toContain("Custom betas")
+    })
+  })
+
+  describe("process_exit", () => {
+    it("detects exit code", () => {
+      const t = extractSdkTermination("Claude Code process exited with code 137")
+      expect(t.reason).toBe("process_exit")
+      expect(t.exitCode).toBe(137)
+    })
+
+    it("captures stderr tail with exit code", () => {
+      const t = extractSdkTermination(
+        "process exited with code 1\nSubprocess stderr: --permission-mode invalid value"
+      )
+      expect(t.reason).toBe("process_exit")
+      expect(t.exitCode).toBe(1)
+      expect(t.stderrTail).toContain("permission-mode")
+    })
+
+    it("returns exit reason without code when code missing", () => {
+      const t = extractSdkTermination("process exited unexpectedly")
+      expect(t.reason).toBe("process_exit")
+      expect(t.exitCode).toBeUndefined()
+    })
+  })
+
+  describe("aborted", () => {
+    it("detects AbortError", () => {
+      const t = extractSdkTermination("AbortError: The operation was aborted")
+      expect(t.reason).toBe("aborted")
+    })
+
+    it("detects 'Aborted' message", () => {
+      const t = extractSdkTermination("Aborted")
+      expect(t.reason).toBe("aborted")
+    })
+  })
+
+  describe("unknown", () => {
+    it("returns 'unknown' for unrecognized messages", () => {
+      const t = extractSdkTermination("Something weird happened")
+      expect(t.reason).toBe("unknown")
+      expect(t.turns).toBeUndefined()
+      expect(t.exitCode).toBeUndefined()
+    })
+
+    it("handles empty string safely", () => {
+      const t = extractSdkTermination("")
+      expect(t.reason).toBe("unknown")
+      expect(t.rawTail).toBeUndefined()
+    })
+
+    it("captures raw error head when reason=unknown so the cause is debuggable", () => {
+      const t = extractSdkTermination("Some weird upstream failure: wibble")
+      expect(t.reason).toBe("unknown")
+      expect(t.rawTail).toBe("Some weird upstream failure: wibble")
+    })
+
+    it("strips the stderr appendix from rawTail (already in stderrTail)", () => {
+      const msg =
+        "Some weird upstream failure: wibble\n" +
+        "Subprocess stderr: Warning: Custom betas..."
+      const t = extractSdkTermination(msg)
+      expect(t.reason).toBe("unknown")
+      expect(t.rawTail).toBe("Some weird upstream failure: wibble")
+      expect(t.stderrTail).toContain("Custom betas")
+    })
+
+    it("truncates very long rawTail to a sensible bound", () => {
+      const longLine = "x".repeat(5000)
+      const t = extractSdkTermination(longLine)
+      expect(t.reason).toBe("unknown")
+      expect((t.rawTail ?? "").length).toBeLessThanOrEqual(300)
+    })
+
+    it("does NOT set rawTail when reason is recognized", () => {
+      const t = extractSdkTermination("Reached maximum number of turns (3)")
+      expect(t.reason).toBe("max_turns")
+      expect(t.rawTail).toBeUndefined()
+    })
+  })
+
+  describe("stderr tail truncation", () => {
+    it("truncates very long stderr to a sensible bound", () => {
+      const longLine = "x".repeat(10_000)
+      const t = extractSdkTermination(`Reached maximum number of turns (3)\nSubprocess stderr: ${longLine}`)
+      expect(t.reason).toBe("max_turns")
+      expect(t.stderrTail).toBeDefined()
+      expect((t.stderrTail ?? "").length).toBeLessThanOrEqual(500)
+    })
+  })
+})
+
+describe("formatSdkTermination", () => {
+  it("formats max_turns with full context", () => {
+    const line = formatSdkTermination(
+      { reason: "max_turns", turns: 3, stderrTail: "Warning: Custom betas..." },
+      { model: "opus[1m]", requestSource: "main", isResume: true, hasDeferredTools: false, sdkSessionId: "5fa9ec00-633c-4f00-b1c2-9e1b3c175ca4" },
+    )
+    expect(line).toContain("sdk_termination")
+    expect(line).toContain("reason=max_turns")
+    expect(line).toContain("turns=3")
+    expect(line).toContain("model=opus[1m]")
+    expect(line).toContain("source=main")
+    expect(line).toContain("resume=true")
+    expect(line).toContain("deferred=false")
+    expect(line).toContain("session=5fa9ec00")
+    expect(line).toContain("Custom betas")
+  })
+
+  it("formats process_exit with exit code and no stderr", () => {
+    const line = formatSdkTermination(
+      { reason: "process_exit", exitCode: 137 },
+      { model: "haiku", isResume: false, hasDeferredTools: false },
+    )
+    expect(line).toContain("reason=process_exit")
+    expect(line).toContain("exit=137")
+    expect(line).not.toContain("stderr=")
+  })
+
+  it("omits unset context fields", () => {
+    const line = formatSdkTermination({ reason: "unknown" }, {})
+    expect(line).toBe("sdk_termination reason=unknown")
+  })
+
+  it("includes raw=… when reason=unknown carries a rawTail", () => {
+    const line = formatSdkTermination(
+      { reason: "unknown", rawTail: "Some weird upstream failure" },
+      { requestSource: "main" },
+    )
+    expect(line).toContain("reason=unknown")
+    expect(line).toContain("source=main")
+    expect(line).toContain('raw="Some weird upstream failure"')
   })
 })

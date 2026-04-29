@@ -319,4 +319,18 @@ describe("Case variant registration", () => {
     const defs = buildAgentDefinitions("No agents here")
     expect(Object.keys(defs)).toHaveLength(0)
   })
+
+  it("PascalCase variant must not share mutable references with base", () => {
+    const defs = buildAgentDefinitions(SAMPLE_TASK_DESCRIPTION, ["mcp__opencode__read"])
+    expect(defs["Explore"]).not.toBe(defs["explore"])
+    defs["Explore"]!.tools!.push("mcp__opencode__poison")
+    expect(defs["explore"]!.tools).not.toContain("mcp__opencode__poison")
+  })
+
+  it("'general-purpose' alias must not share mutable references with target", () => {
+    const defs = buildAgentDefinitions(SAMPLE_TASK_DESCRIPTION, ["mcp__opencode__read"])
+    expect(defs["general-purpose"]).not.toBe(defs["general"])
+    defs["general-purpose"]!.tools!.push("mcp__opencode__poison")
+    expect(defs["general"]!.tools).not.toContain("mcp__opencode__poison")
+  })
 })

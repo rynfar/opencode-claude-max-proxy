@@ -144,6 +144,14 @@ function ensureDefaultAgents(
  *
  * Also registers common Claude-invented names like "general-purpose".
  */
+function cloneAgentDefinition(def: AgentDefinition): AgentDefinition {
+  return {
+    ...def,
+    ...(def.tools ? { tools: [...def.tools] } : {}),
+    ...(def.disallowedTools ? { disallowedTools: [...def.disallowedTools] } : {}),
+  }
+}
+
 function addCaseVariants(agents: Record<string, AgentDefinition>): void {
   // Snapshot keys before mutating (avoids iterating newly-added entries)
   const baseNames = Object.keys(agents)
@@ -155,7 +163,7 @@ function addCaseVariants(agents: Record<string, AgentDefinition>): void {
       sep + ch.toUpperCase()
     )
     if (titleCase !== name && !agents[titleCase]) {
-      agents[titleCase] = def
+      agents[titleCase] = cloneAgentDefinition(def)
     }
   }
 
@@ -166,7 +174,7 @@ function addCaseVariants(agents: Record<string, AgentDefinition>): void {
   }
   for (const [alias, target] of Object.entries(ALIASES)) {
     if (!agents[alias] && agents[target]) {
-      agents[alias] = agents[target]!
+      agents[alias] = cloneAgentDefinition(agents[target]!)
     }
   }
 }

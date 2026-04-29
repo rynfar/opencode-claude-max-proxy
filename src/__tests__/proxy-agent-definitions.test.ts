@@ -6,7 +6,14 @@
  */
 
 import { describe, it, expect } from "bun:test"
-import { parseAgentDescriptions, buildAgentDefinitions, mapModelTier, FALLBACK_AGENT_NAME } from "../proxy/agentDefs"
+import {
+  parseAgentDescriptions,
+  buildAgentDefinitions,
+  mapModelTier,
+  FALLBACK_AGENT_NAME,
+  parseAgentNamesFromSchema,
+  buildAgentDefinitionsFromTool,
+} from "../proxy/agentDefs"
 
 const SAMPLE_TASK_DESCRIPTION = `Launch a new agent to handle complex, multistep tasks autonomously.
 
@@ -283,6 +290,125 @@ describe("Default agent injection", () => {
     const agents = buildAgentDefinitions(desc)
 
     expect(agents[FALLBACK_AGENT_NAME]).toBeDefined()
+  })
+})
+
+describe("parseAgentNamesFromSchema (input_schema enum fallback)", () => {
+  it("extracts enum names from input_schema.properties.subagent_type", () => {
+    const tool = {
+      name: "task",
+      description: "Spawn agent task with category-based or direct agent selection.",
+      input_schema: {
+        type: "object",
+        properties: {
+          subagent_type: { type: "string", enum: ["oracle", "librarian", "dev", "explore"] },
+        },
+      },
+    }
+    expect(parseAgentNamesFromSchema(tool)).toEqual(["oracle", "librarian", "dev", "explore"])
+  })
+
+  it("returns empty array when subagent_type has no enum", () => {
+    const tool = {
+      input_schema: {
+        properties: { subagent_type: { type: "string" } },
+      },
+    }
+    expect(parseAgentNamesFromSchema(tool)).toEqual([])
+  })
+
+  it("returns empty array when input_schema is missing", () => {
+    expect(parseAgentNamesFromSchema({})).toEqual([])
+    expect(parseAgentNamesFromSchema(null)).toEqual([])
+    expect(parseAgentNamesFromSchema(undefined)).toEqual([])
+  })
+
+  it("ignores non-string enum entries", () => {
+    const tool = {
+      input_schema: {
+        properties: {
+          subagent_type: { enum: ["oracle", 42, null, "librarian"] },
+        },
+      },
+    }
+    expect(parseAgentNamesFromSchema(tool)).toEqual(["oracle", "librarian"])
+  })
+
+  it("returns empty for primitive inputs without crashing", () => {
+    expect(parseAgentNamesFromSchema(42)).toEqual([])
+    expect(parseAgentNamesFromSchema("string")).toEqual([])
+    expect(parseAgentNamesFromSchema(true)).toEqual([])
+    expect(parseAgentNamesFromSchema([])).toEqual([])
+  })
+
+  it("returns empty when nested path is wrong shape", () => {
+    expect(parseAgentNamesFromSchema({ input_schema: 42 })).toEqual([])
+    expect(parseAgentNamesFromSchema({ input_schema: { properties: "bad" } })).toEqual([])
+    expect(parseAgentNamesFromSchema({
+      input_schema: { properties: { subagent_type: { enum: "not-array" } } },
+    })).toEqual([])
+  })
+})
+
+describe("buildAgentDefinitionsFromTool (regex with enum fallback)", () => {
+  const omoStyleTool = {
+    name: "task",
+    description:
+      "Spawn agent task with category-based or direct agent selection.\n\nCRITICAL: You MUST provide EITHER category OR subagent_type.",
+    input_schema: {
+      type: "object",
+      properties: {
+        subagent_type: { type: "string", enum: ["oracle", "librarian"] },
+      },
+    },
+  }
+
+  it("falls back to enum when description has no 'Available agent types' block", () => {
+    const defs = buildAgentDefinitionsFromTool(omoStyleTool)
+    expect(defs["oracle"]).toBeDefined()
+    expect(defs["librarian"]).toBeDefined()
+    expect(defs["build"]).toBeDefined()
+    expect(defs["plan"]).toBeDefined()
+    expect(defs["explore"]).toBeDefined()
+    expect(defs["general"]).toBeDefined()
+  })
+
+  it("PascalCase variants present after enum fallback", () => {
+    const defs = buildAgentDefinitionsFromTool(omoStyleTool)
+    expect(defs["Oracle"]).toBeDefined()
+    expect(defs["Librarian"]).toBeDefined()
+  })
+
+  it("description-based parsing takes precedence over enum", () => {
+    const tool = {
+      description: SAMPLE_TASK_DESCRIPTION,
+      input_schema: {
+        properties: { subagent_type: { enum: ["unrelated-name"] } },
+      },
+    }
+    const defs = buildAgentDefinitionsFromTool(tool)
+    expect(defs["build"]).toBeDefined()
+    expect(defs["oracle"]).toBeDefined()
+    expect(defs["unrelated-name"]).toBeUndefined()
+  })
+
+  it("returns empty when both description block and enum are missing", () => {
+    expect(buildAgentDefinitionsFromTool({ description: "no block" })).toEqual({})
+    expect(buildAgentDefinitionsFromTool({})).toEqual({})
+  })
+
+  it("includes MCP tools on enum-derived agents", () => {
+    const mcpTools = ["mcp__opencode__read", "mcp__opencode__bash"]
+    const defs = buildAgentDefinitionsFromTool(omoStyleTool, mcpTools)
+    expect(defs["oracle"]!.tools).toEqual(mcpTools)
+    expect(defs["librarian"]!.tools).toEqual(mcpTools)
+    expect(defs["general"]!.tools).toEqual(mcpTools)
+  })
+
+  it("each enum-derived agent has prompt + inherit model", () => {
+    const defs = buildAgentDefinitionsFromTool(omoStyleTool)
+    expect(defs["oracle"]!.model).toBe("inherit")
+    expect(defs["oracle"]!.prompt).toContain(`"oracle" agent`)
   })
 })
 

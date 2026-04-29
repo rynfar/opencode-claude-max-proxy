@@ -171,9 +171,49 @@ function addCaseVariants(agents: Record<string, AgentDefinition>): void {
   }
 }
 
-/**
- * Build a system prompt for an agent based on its name and description.
- */
+function getNested(obj: unknown, ...keys: string[]): unknown {
+  let cur: unknown = obj
+  for (const key of keys) {
+    if (cur === null || typeof cur !== "object") return undefined
+    cur = (cur as Record<string, unknown>)[key]
+  }
+  return cur
+}
+
+export function parseAgentNamesFromSchema(taskTool: unknown): string[] {
+  const enumNames = getNested(taskTool, "input_schema", "properties", "subagent_type", "enum")
+  if (!Array.isArray(enumNames)) return []
+  return enumNames.filter((n: unknown): n is string => typeof n === "string")
+}
+
+export function buildAgentDefinitionsFromTool(
+  taskTool: unknown,
+  mcpToolNames?: string[]
+): Record<string, AgentDefinition> {
+  const rawDescription = getNested(taskTool, "description")
+  const description = typeof rawDescription === "string" ? rawDescription : ""
+  const fromDescription = buildAgentDefinitions(description, mcpToolNames)
+  if (Object.keys(fromDescription).length > 0) return fromDescription
+
+  const names = parseAgentNamesFromSchema(taskTool)
+  if (names.length === 0) return {}
+
+  const agents: Record<string, AgentDefinition> = {}
+  for (const name of names) {
+    if (agents[name]) continue
+    const desc = `User-defined agent: ${name}`
+    agents[name] = {
+      description: desc,
+      prompt: buildAgentPrompt(name, desc),
+      model: "inherit",
+      ...(mcpToolNames?.length ? { tools: [...mcpToolNames] } : {}),
+    }
+  }
+  ensureDefaultAgents(agents, mcpToolNames)
+  addCaseVariants(agents)
+  return agents
+}
+
 function buildAgentPrompt(name: string, description: string): string {
   return `You are the "${name}" agent. ${description}
 

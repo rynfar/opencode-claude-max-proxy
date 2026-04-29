@@ -11,7 +11,7 @@ import { type FileChange, extractFileChangesFromBash } from "../fileChanges"
 import { normalizeContent } from "../messages"
 import { extractClientCwd } from "../session/fingerprint"
 import { BLOCKED_BUILTIN_TOOLS, CLAUDE_CODE_ONLY_TOOLS, MCP_SERVER_NAME, ALLOWED_MCP_TOOLS } from "../tools"
-import { buildAgentDefinitions } from "../agentDefs"
+import { buildAgentDefinitionsFromTool } from "../agentDefs"
 import { fuzzyMatchAgentName } from "../agentMatch"
 
 export const openCodeAdapter: AgentAdapter = {
@@ -77,8 +77,8 @@ export const openCodeAdapter: AgentAdapter = {
   buildSdkAgents(body: any, mcpToolNames: readonly string[]): Record<string, any> {
     if (!Array.isArray(body.tools)) return {}
     const taskTool = body.tools.find((t: any) => t.name === "task" || t.name === "Task")
-    if (!taskTool?.description) return {}
-    return buildAgentDefinitions(taskTool.description, [...mcpToolNames])
+    if (!taskTool) return {}
+    return buildAgentDefinitionsFromTool(taskTool, [...mcpToolNames])
   },
 
   /**

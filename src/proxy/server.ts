@@ -851,9 +851,18 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
                   name: toolName,
                   input: toolInput,
                 })
+                // The reason text is read by the model as the "tool result" of
+                // a denied call. With a vague reason ("Forwarding to client for
+                // execution") modern Claude tends to retry with a different
+                // tool, burning the maxTurns budget. Be explicit that the call
+                // succeeded externally and that the model should stop here —
+                // see telemetry for the failure mode this addresses.
                 return {
                   decision: "block" as const,
-                  reason: "Forwarding to client for execution",
+                  reason:
+                    "This tool call has been forwarded to the client for execution. " +
+                    "The result will be delivered in a future turn. " +
+                    "Do not retry, do not call additional tools, and do not generate further text — end your turn now.",
                 }
               }],
             }],
@@ -1343,6 +1352,10 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
 
             let messageStartEmitted = false
             let lastUsage: TokenUsage | undefined
+            // Hoisted out of the inner streaming loop so the outer catch can
+            // dedupe captured tool_uses against what was already forwarded
+            // when recovering gracefully from max_turns (see catch below).
+            const streamedToolUseIds = new Set<string>()
 
             try {
               let currentSessionId: string | undefined
@@ -1512,7 +1525,6 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
               // the key-value pair may span multiple deltas, preventing regex match.
               const taskToolBlockIndices = new Set<number>()
               const taskToolJsonBuffer = new Map<number, string>()
-              const streamedToolUseIds = new Set<string>()
 
               // Block index remapping: the SDK resets indices on each turn, but
               // we skip intermediate message_start/stop so the client sees one
@@ -1973,6 +1985,111 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
               // and stderr tail to /telemetry/logs?category=error so failures are
               // visible without trawling raw log files.
               const sdkTerm = extractSdkTermination(errMsg)
+
+              // Graceful recovery: when max_turns hits in passthrough mode but
+              // we already captured tool_use blocks, the client has actionable
+              // content — they received the tool_use blocks via SSE before the
+              // budget was exhausted. Convert the failure into a clean
+              // stop_reason="tool_use" response so the client executes the
+              // tools and drives the next turn (the same outcome as a normal
+              // tool-use cycle). Without this, the client sees a 500 even
+              // though we already streamed everything it needs.
+              const canRecoverAsToolUse =
+                sdkTerm.reason === "max_turns" &&
+                passthrough &&
+                capturedToolUses.length > 0 &&
+                messageStartEmitted
+
+              if (canRecoverAsToolUse) {
+                // Log the recovery at session level (not error) — it's a
+                // notable flow control event but not a failure for the client.
+                diagnosticLog.session(
+                  `${requestMeta.requestId} sdk_termination_recovered ${formatSdkTermination(sdkTerm, {
+                    model,
+                    requestSource,
+                    isResume,
+                    hasDeferredTools,
+                    sdkSessionId: resumeSessionId,
+                  })} captured=${capturedToolUses.length}`,
+                  requestMeta.requestId,
+                )
+
+                // Mirror the success-path emission: send any unseen tool_uses
+                // (dedup against streamedToolUseIds), then a clean
+                // message_delta with stop_reason="tool_use" + message_stop.
+                const unseenToolUses = capturedToolUses.filter(tu => !streamedToolUseIds.has(tu.id))
+                for (let i = 0; i < unseenToolUses.length; i++) {
+                  const tu = unseenToolUses[i]!
+                  const blockIndex = eventsForwarded + i
+                  safeEnqueue(encoder.encode(
+                    `event: content_block_start\ndata: ${JSON.stringify({
+                      type: "content_block_start",
+                      index: blockIndex,
+                      content_block: { type: "tool_use", id: tu.id, name: tu.name, input: {} }
+                    })}\n\n`
+                  ), "recover_tool_block_start")
+                  safeEnqueue(encoder.encode(
+                    `event: content_block_delta\ndata: ${JSON.stringify({
+                      type: "content_block_delta",
+                      index: blockIndex,
+                      delta: { type: "input_json_delta", partial_json: JSON.stringify(tu.input) }
+                    })}\n\n`
+                  ), "recover_tool_input")
+                  safeEnqueue(encoder.encode(
+                    `event: content_block_stop\ndata: ${JSON.stringify({
+                      type: "content_block_stop",
+                      index: blockIndex
+                    })}\n\n`
+                  ), "recover_tool_block_stop")
+                }
+                safeEnqueue(encoder.encode(
+                  `event: message_delta\ndata: ${JSON.stringify({
+                    type: "message_delta",
+                    delta: { stop_reason: "tool_use", stop_sequence: null },
+                    usage: { output_tokens: 0 }
+                  })}\n\n`
+                ), "recover_message_delta")
+                safeEnqueue(encoder.encode(
+                  `event: message_stop\ndata: {"type":"message_stop"}\n\n`
+                ), "recover_message_stop")
+
+                // Record as success — the client got a usable response.
+                const recoverTotalMs = Date.now() - requestStartAt
+                const recoverQueueWaitMs = requestMeta.queueStartedAt - requestMeta.queueEnteredAt
+                telemetryStore.record({
+                  requestId: requestMeta.requestId,
+                  timestamp: Date.now(),
+                  adapter: adapter.name,
+                  requestSource,
+                  model,
+                  requestModel: body.model || undefined,
+                  mode: "stream",
+                  isResume,
+                  isPassthrough: passthrough,
+                  hasDeferredTools,
+                  deferredToolCount: hasDeferredTools ? deferredToolCount : undefined,
+                  toolCount,
+                  lineageType,
+                  messageCount: allMessages.length,
+                  sdkSessionId: resumeSessionId,
+                  status: 200,
+                  queueWaitMs: recoverQueueWaitMs,
+                  proxyOverheadMs: upstreamStartAt - requestStartAt - recoverQueueWaitMs,
+                  ttfbMs: firstChunkAt ? firstChunkAt - upstreamStartAt : null,
+                  upstreamDurationMs: Date.now() - upstreamStartAt,
+                  totalDurationMs: recoverTotalMs,
+                  contentBlocks: eventsForwarded + unseenToolUses.length,
+                  textEvents: textEventsForwarded,
+                  error: null,
+                })
+
+                if (!streamClosed) {
+                  try { controller.close() } catch {}
+                  streamClosed = true
+                }
+                return
+              }
+
               diagnosticLog.error(
                 `${requestMeta.requestId} ${formatSdkTermination(sdkTerm, {
                   model,

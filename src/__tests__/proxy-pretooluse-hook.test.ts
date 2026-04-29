@@ -391,6 +391,11 @@ describe("PreToolUse hook: passthrough ToolSearch", () => {
     }, undefined, { signal: new AbortController().signal })
 
     expect(result.decision).toBe("block")
-    expect(result.reason).toBe("Forwarding to client for execution")
+    // Reason must explicitly tell the model NOT to retry or emit further
+    // tools — without this nudge, modern Claude treats the deny as "try
+    // something else" and burns the maxTurns budget on retries.
+    expect(result.reason).toContain("forwarded to the client for execution")
+    expect(result.reason.toLowerCase()).toContain("do not retry")
+    expect(result.reason.toLowerCase()).toContain("end your turn")
   })
 })

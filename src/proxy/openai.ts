@@ -498,13 +498,17 @@ function toFinishReason(stopReason: string | undefined): "stop" | "length" | "to
 
 /**
  * Translate a complete Anthropic /v1/messages response to OpenAI format.
- * Currently supports only text, thinking and function call blocks
+ * Currently supports only text, thinking and function call blocks.
+ *
+ * When `thinkingPassthrough` is false, thinking blocks are not
+ * mapped to `reasoning_content` (stripped from the response).
  */
 export function translateAnthropicToOpenAi(
   response: AnthropicResponse,
   completionId: string,
   model: string,
-  created: number
+  created: number,
+  options?: { thinkingPassthrough?: boolean },
 ): OpenAiCompletion {
   const contentBlocks = response.content ?? []
 
@@ -524,10 +528,13 @@ export function translateAnthropicToOpenAi(
         }
       }))
 
-  const thinking = contentBlocks
-    .filter(b => b.type === "thinking")
-    .map(b => (b as AnthropicThinkingBlock).thinking!)
-    .join("")
+  const thinkingPassthrough = options?.thinkingPassthrough
+  const thinking = thinkingPassthrough !== false
+    ? contentBlocks
+        .filter(b => b.type === "thinking")
+        .map(b => (b as AnthropicThinkingBlock).thinking!)
+        .join("")
+    : ""
 
   const promptTokens = response.usage?.input_tokens ?? 0
   const completionTokens = response.usage?.output_tokens ?? 0
@@ -590,6 +597,8 @@ export interface SseTranslatorContext {
   completionId: string
   model: string
   created: number
+  /** When false, thinking blocks are stripped from the response */
+  thinkingPassthrough?: boolean
 }
 
 /**
@@ -624,6 +633,7 @@ export function createSseTranslator(ctx: SseTranslatorContext): SseTranslator {
       ctx.model,
       ctx.created,
       toolCallIndex,
+      ctx.thinkingPassthrough,
     )
   }
 }
@@ -637,13 +647,17 @@ export function createSseTranslator(ctx: SseTranslatorContext): SseTranslator {
  * chunks. Callers tracking multiple tools per stream must increment it on
  * each `content_block_start` with `type: "tool_use"` *before* calling this
  * function. Use `createSseTranslator` to handle this automatically.
+ *
+ * When `thinkingPassthrough` is false, thinking_delta events are skipped
+ * so the client does not receive reasoning_content.
  */
 export function translateAnthropicSseEvent(
   event: AnthropicSseEvent,
   completionId: string,
   model: string,
   created: number,
-  toolCallNum: number
+  toolCallNum: number,
+  thinkingPassthrough?: boolean
 ): OpenAiStreamChunk | null {
   // Initial chunk: role announcement
   if (event.type === "message_start") {
@@ -729,21 +743,27 @@ export function translateAnthropicSseEvent(
   // Reasoning
   if (
     event.type === "content_block_delta" &&
-    event.delta?.type === "thinking_delta" &&
-    typeof event.delta?.thinking === "string"
+    event.delta?.type === "thinking_delta"
   ) {
-    return {
-      id: completionId,
-      object: "chat.completion.chunk",
-      created,
-      model,
-      choices: [{
-        index: 0,
-        delta: {
-          reasoning_content: event.delta?.thinking
-        },
-        finish_reason: null
-      }],
+    // Skip thinking content only when passthrough is explicitly disabled.
+    // Default (undefined or true) passes thinking through for backward compatibility.
+    if (thinkingPassthrough === false) {
+      return null
+    }
+    if (typeof event.delta?.thinking === "string") {
+      return {
+        id: completionId,
+        object: "chat.completion.chunk",
+        created,
+        model,
+        choices: [{
+          index: 0,
+          delta: {
+            reasoning_content: event.delta?.thinking
+          },
+          finish_reason: null
+        }],
+      }
     }
   }
 

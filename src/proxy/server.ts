@@ -2313,9 +2313,16 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
     const created = Math.floor(Date.now() / 1000)
     const model = (typeof rawBody.model === "string" && rawBody.model) ? rawBody.model : "claude-sonnet-4-6"
 
+    // Resolve SDK features for this request (thinking passthrough setting)
+    const { getFeaturesForAdapter } = require("./sdkFeatures") as typeof import("./sdkFeatures")
+    const adapter = detectAdapter(c)
+    const sdkFeatures = getFeaturesForAdapter(adapter.name)
+
     if (!anthropicBody.stream) {
       const anthropicRes = await internalRes.json() as Record<string, unknown>
-      return c.json(translateAnthropicToOpenAi(anthropicRes, completionId, model, created))
+      return c.json(translateAnthropicToOpenAi(anthropicRes, completionId, model, created, {
+        thinkingPassthrough: sdkFeatures.thinkingPassthrough
+      }))
     }
 
     // Streaming: translate Anthropic SSE events to OpenAI SSE chunks
@@ -2329,7 +2336,7 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
         let buffer = ""
         let streamError: Error | null = null
 
-        const translate = createSseTranslator({ completionId, model, created })
+        const translate = createSseTranslator({ completionId, model, created, thinkingPassthrough: sdkFeatures.thinkingPassthrough })
 
         try {
           while (true) {

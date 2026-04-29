@@ -45,7 +45,8 @@ import { classifyError, isStaleSessionError, isRateLimitError, isExtraUsageRequi
 import { refreshOAuthToken } from "./tokenRefresh"
 import { checkPluginConfigured } from "./setup"
 import { mapModelToClaudeModel, resolveClaudeExecutableAsync, resolveSdkModelDefaults, isClosedControllerError, getClaudeAuthStatusAsync, getAuthCacheInfo, hasExtendedContext, stripExtendedContext, recordExtendedContextUnavailable } from "./models"
-import { translateOpenAiToAnthropic, translateAnthropicToOpenAi, translateAnthropicSseEvent, buildModelList } from "./openai"
+import type { AnthropicSseEvent } from "./openai"
+import { translateOpenAiToAnthropic, translateAnthropicToOpenAi, buildModelList, createSseTranslator } from "./openai"
 import { extractAdvisorModel, getLastUserMessage, stripAdvisorTools } from "./messages"
 import { requireAuth, authEnabled } from "./auth"
 import { detectAdapter } from "./adapters/detect"
@@ -2312,9 +2313,16 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
     const created = Math.floor(Date.now() / 1000)
     const model = (typeof rawBody.model === "string" && rawBody.model) ? rawBody.model : "claude-sonnet-4-6"
 
+    // Resolve SDK features for this request (thinking passthrough setting)
+    const { getFeaturesForAdapter } = require("./sdkFeatures") as typeof import("./sdkFeatures")
+    const adapter = detectAdapter(c)
+    const sdkFeatures = getFeaturesForAdapter(adapter.name)
+
     if (!anthropicBody.stream) {
       const anthropicRes = await internalRes.json() as Record<string, unknown>
-      return c.json(translateAnthropicToOpenAi(anthropicRes, completionId, model, created))
+      return c.json(translateAnthropicToOpenAi(anthropicRes, completionId, model, created, {
+        thinkingPassthrough: sdkFeatures.thinkingPassthrough
+      }))
     }
 
     // Streaming: translate Anthropic SSE events to OpenAI SSE chunks
@@ -2327,6 +2335,8 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
         const decoder = new TextDecoder()
         let buffer = ""
         let streamError: Error | null = null
+
+        const translate = createSseTranslator({ completionId, model, created, thinkingPassthrough: sdkFeatures.thinkingPassthrough })
 
         try {
           while (true) {
@@ -2347,7 +2357,7 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
               catch { continue }
               if (typeof event.type !== "string") continue
 
-              const chunk = translateAnthropicSseEvent(event as { type: string } & Record<string, unknown>, completionId, model, created)
+              const chunk = translate(event as unknown as AnthropicSseEvent)
               if (chunk) controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`))
             }
           }

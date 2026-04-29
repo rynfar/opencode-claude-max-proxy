@@ -21,6 +21,8 @@ import {
   messageStop,
   assistantMessage,
   parseSSE,
+  toolUseBlockStart,
+  inputJsonDelta,
 } from "./helpers"
 
 let mockMessages: unknown[] = []
@@ -359,6 +361,129 @@ describe("POST /v1/chat/completions — streaming", () => {
     const uniqueIds = new Set(ids)
     expect(uniqueIds.size).toBe(1)
     expect([...uniqueIds][0]).toMatch(/^chatcmpl-/)
+  })
+
+  // --- tool_call_counter increment behavior ---
+
+  type DeltaToolCall = {
+    type?: string
+    index?: number
+    id?: string
+    function?: { name?: string; arguments?: string }
+  }
+  type StreamChunk = {
+    choices: Array<{
+      delta: { tool_calls?: DeltaToolCall[]; content?: string; reasoning_content?: string }
+      finish_reason: string | null
+    }>
+  }
+
+  function streamChunks(text: string): StreamChunk[] {
+    return text.split("\n")
+      .filter(l => l.startsWith("data: ") && l !== "data: [DONE]")
+      .map(l => JSON.parse(l.slice(6)) as StreamChunk)
+  }
+
+  it("single tool_use stream emits tool_call with index 0", async () => {
+    mockMessages = [
+      messageStart("msg_1"),
+      toolUseBlockStart(0, "get_weather", "tu_1"),
+      inputJsonDelta(0, '{"city":'),
+      inputJsonDelta(0, '"NYC"}'),
+      blockStop(0),
+      messageDelta("tool_use"),
+      messageStop(),
+    ]
+    const app = createTestApp()
+
+    const res = await postChatCompletion(app, {
+      stream: true,
+      messages: [{ role: "user", content: "weather?" }],
+    })
+
+    const chunks = streamChunks(await readStream(res))
+    const toolCallChunks = chunks
+      .map(c => c.choices[0]!.delta.tool_calls)
+      .filter((tc): tc is DeltaToolCall[] => Array.isArray(tc) && tc.length > 0)
+
+    expect(toolCallChunks.length).toBeGreaterThan(0)
+    // Every emitted tool_call delta for a single tool must use index 0
+    for (const tc of toolCallChunks) {
+      expect(tc[0]!.index).toBe(0)
+    }
+
+    // Final chunk has tool_calls finish_reason
+    const finishChunk = chunks.find(c => c.choices[0]!.finish_reason !== null)
+    expect(finishChunk?.choices[0]!.finish_reason).toBe("tool_calls")
+  })
+
+  it("multiple sequential tool_use blocks emit ascending indexes 0, 1, 2", async () => {
+    mockMessages = [
+      messageStart("msg_1"),
+      toolUseBlockStart(0, "fn_a", "tu_a"),
+      inputJsonDelta(0, '{"x":1}'),
+      blockStop(0),
+      toolUseBlockStart(1, "fn_b", "tu_b"),
+      inputJsonDelta(1, '{"y":2}'),
+      blockStop(1),
+      toolUseBlockStart(2, "fn_c", "tu_c"),
+      inputJsonDelta(2, '{"z":3}'),
+      blockStop(2),
+      messageDelta("tool_use"),
+      messageStop(),
+    ]
+    const app = createTestApp()
+
+    const res = await postChatCompletion(app, {
+      stream: true,
+      messages: [{ role: "user", content: "do all three" }],
+    })
+
+    const chunks = streamChunks(await readStream(res))
+
+    // Tool starts are the chunks that carry id + name; collect their indexes in order
+    const startIndexes = chunks
+      .map(c => c.choices[0]!.delta.tool_calls?.[0])
+      .filter((tc): tc is DeltaToolCall => !!tc && tc.type === "function" && typeof tc.id === "string")
+      .map(tc => tc.index)
+    expect(startIndexes).toEqual([0, 1, 2])
+
+    // Argument-delta chunks for each tool should carry the matching index
+    const argChunks = chunks
+      .map(c => c.choices[0]!.delta.tool_calls?.[0])
+      .filter((tc): tc is DeltaToolCall =>
+        !!tc && !tc.id && typeof tc.function?.arguments === "string"
+      )
+    expect(argChunks.map(a => a.index)).toEqual([0, 1, 2])
+    expect(argChunks.map(a => a.function!.arguments)).toEqual(['{"x":1}', '{"y":2}', '{"z":3}'])
+  })
+
+  it("text-then-tool stream: tool indexes start at 0 (not affected by preceding text block)", async () => {
+    // tool_call_counter only increments on tool_use blocks, so a text block
+    // before a tool_use should still result in index 0 for the first tool.
+    mockMessages = [
+      messageStart("msg_1"),
+      textBlockStart(0), textDelta(0, "let me check"),
+      blockStop(0),
+      toolUseBlockStart(1, "search", "tu_1"),
+      inputJsonDelta(1, '{"q":"x"}'),
+      blockStop(1),
+      messageDelta("tool_use"),
+      messageStop(),
+    ]
+    const app = createTestApp()
+
+    const res = await postChatCompletion(app, {
+      stream: true,
+      messages: [{ role: "user", content: "go" }],
+    })
+
+    const chunks = streamChunks(await readStream(res))
+    const startIndex = chunks
+      .map(c => c.choices[0]!.delta.tool_calls?.[0])
+      .find((tc): tc is DeltaToolCall => !!tc && tc.type === "function" && typeof tc.id === "string")
+      ?.index
+    expect(startIndex).toBe(0)
   })
 })
 

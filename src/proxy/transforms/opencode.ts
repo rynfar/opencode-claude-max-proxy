@@ -1,7 +1,7 @@
 import type { Transform, RequestContext } from "../transform"
 import { extractFileChangesFromBash, type FileChange } from "../fileChanges"
 import { BLOCKED_BUILTIN_TOOLS, CLAUDE_CODE_ONLY_TOOLS, ALLOWED_MCP_TOOLS } from "../tools"
-import { buildAgentDefinitions } from "../agentDefs"
+import { buildAgentDefinitionsFromTool } from "../agentDefs"
 import { fuzzyMatchAgentName } from "../agentMatch"
 
 export const openCodeTransforms: Transform[] = [
@@ -26,8 +26,8 @@ export const openCodeTransforms: Transform[] = [
       let sdkAgents: Record<string, any> = {}
       if (Array.isArray(body.tools)) {
         const taskTool = body.tools.find((t: any) => t.name === "task" || t.name === "Task")
-        if (taskTool?.description) {
-          sdkAgents = buildAgentDefinitions(taskTool.description, [...allowedMcpTools])
+        if (taskTool) {
+          sdkAgents = buildAgentDefinitionsFromTool(taskTool, [...allowedMcpTools])
         }
       }
 

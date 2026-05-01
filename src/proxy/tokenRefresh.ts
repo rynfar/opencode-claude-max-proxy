@@ -74,6 +74,20 @@ export interface CredentialStore {
   write(credentials: CredentialsFile): Promise<boolean>
 }
 
+/**
+ * Serialize a credentials object to the on-disk / Keychain format Claude Code
+ * expects.
+ *
+ * MUST be compact (no whitespace) — Claude Code's credential parser cannot
+ * read pretty-printed JSON and treats the user as logged out when it
+ * encounters one. See issue #452.
+ *
+ * Exported so the regression test can pin the output format directly.
+ */
+export function serializeCredentials(credentials: CredentialsFile): string {
+  return JSON.stringify(credentials)
+}
+
 // ---------------------------------------------------------------------------
 // macOS Keychain backend
 // ---------------------------------------------------------------------------
@@ -121,7 +135,7 @@ function buildMacosStore(serviceName: string): CredentialStore {
     },
 
     async write(credentials) {
-      const json = JSON.stringify(credentials, null, 2)
+      const json = serializeCredentials(credentials)
       const wasHex = keychainWasHexByService.get(serviceName) ?? false
       // Write back in the same encoding Claude Code expects — hex after `claude login`.
       const value = wasHex ? Buffer.from(json).toString("hex") : json
@@ -162,7 +176,7 @@ function buildFileStore(filePath: string): CredentialStore {
       try {
         // Ensure parent dir exists for non-default paths.
         mkdirSync(dirname(filePath), { recursive: true })
-        writeFileSync(filePath, JSON.stringify(credentials, null, 2), "utf-8")
+        writeFileSync(filePath, serializeCredentials(credentials), "utf-8")
         return true
       } catch (err) {
         claudeLog("token_refresh.file_write_failed", { path: filePath, error: String(err) })

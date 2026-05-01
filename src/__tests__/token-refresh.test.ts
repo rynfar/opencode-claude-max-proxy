@@ -8,6 +8,7 @@
 
 import { describe, it, expect, mock, beforeEach, afterEach } from "bun:test"
 import type { CredentialStore } from "../proxy/tokenRefresh"
+import { serializeCredentials } from "../proxy/tokenRefresh"
 
 /** Assign a mock to globalThis.fetch without TS complaining about missing `preconnect` */
 function mockFetch(fn: (...args: unknown[]) => Promise<Response | never>): void {
@@ -288,5 +289,60 @@ describe("isExpiredTokenError", () => {
     expect(isExpiredTokenError("rate limit exceeded")).toBe(false)
     expect(isExpiredTokenError("invalid credentials")).toBe(false)
     expect(isExpiredTokenError("token refresh failed")).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Regression: issue #452 — credentials must be written compact (no whitespace)
+// ---------------------------------------------------------------------------
+//
+// `JSON.stringify(credentials, null, 2)` would pretty-print, which Claude
+// Code's credential parser cannot read. Result: silent logout after Meridian
+// refreshed the token. This test pins the output format so a future commit
+// can't accidentally re-introduce indentation.
+
+describe("serializeCredentials", () => {
+  const FIXTURE = {
+    claudeAiOauth: {
+      accessToken: "tok-abc",
+      refreshToken: "ref-xyz",
+      expiresAt: 1700000000000,
+      scopes: ["openid", "profile"],
+      subscriptionType: "max",
+      rateLimitTier: "standard",
+    },
+  }
+
+  it("emits compact JSON (no newlines)", () => {
+    expect(serializeCredentials(FIXTURE)).not.toContain("\n")
+  })
+
+  it("emits compact JSON (no two-space indent)", () => {
+    expect(serializeCredentials(FIXTURE)).not.toContain("  ")
+  })
+
+  it("emits valid JSON that round-trips through JSON.parse", () => {
+    const out = serializeCredentials(FIXTURE)
+    expect(JSON.parse(out)).toEqual(FIXTURE)
+  })
+
+  it("matches what JSON.stringify(x) would produce (drop-in equivalent)", () => {
+    expect(serializeCredentials(FIXTURE)).toBe(JSON.stringify(FIXTURE))
+  })
+
+  it("preserves arbitrary extra fields (does not strip user data)", () => {
+    const withExtras = { ...FIXTURE, customField: "value", nested: { a: 1 } }
+    const parsed = JSON.parse(serializeCredentials(withExtras))
+    expect(parsed.customField).toBe("value")
+    expect(parsed.nested).toEqual({ a: 1 })
+  })
+
+  it("never emits the pretty-printed form (regression #452)", () => {
+    const compact = serializeCredentials(FIXTURE)
+    const pretty = JSON.stringify(FIXTURE, null, 2)
+    expect(compact).not.toBe(pretty)
+    // pretty-printed always contains a newline between fields; compact never does.
+    expect(pretty).toContain("\n")
+    expect(compact).not.toContain("\n")
   })
 })

@@ -39,7 +39,11 @@ export interface AdapterFeatures {
 export type FeatureConfig = Record<string, Partial<AdapterFeatures>>
 
 const DEFAULT_FEATURES: AdapterFeatures = {
-  codeSystemPrompt: false,
+  // Default to ON for non-passthrough adapters. Historically the preset was
+  // applied via a query.ts fallback when sdkFeatures was unset; now that
+  // server.ts respects the value directly (issue #408), the default has to
+  // be encoded here. ADAPTER_DEFAULTS overrides this for passthrough below.
+  codeSystemPrompt: true,
   clientSystemPrompt: true,
   claudeMd: "off" as const,
   memory: false,
@@ -53,8 +57,20 @@ const DEFAULT_FEATURES: AdapterFeatures = {
   additionalDirectories: "",
 }
 
-/** Adapters that ship with features pre-enabled (none by default — use settings UI) */
-const ADAPTER_DEFAULTS: Record<string, Partial<AdapterFeatures>> = {}
+/**
+ * Per-adapter default overrides. Most adapters use DEFAULT_FEATURES; only
+ * adapters with adapter-specific defaults appear here.
+ */
+const ADAPTER_DEFAULTS: Record<string, Partial<AdapterFeatures>> = {
+  // The `passthrough` adapter is the lightweight Anthropic-API-compatible
+  // proxy mode. The Claude Code preset is ~28 KB of system prompt the
+  // forwarded model doesn't need (and most pass-through clients don't want
+  // to pay for). Default it OFF — preserves the #190 token-saving fix.
+  // User can flip it on via the settings UI for explicit opt-in.
+  passthrough: {
+    codeSystemPrompt: false,
+  },
+}
 
 function getConfigPath(): string {
   const dir = join(homedir(), ".config", "meridian")

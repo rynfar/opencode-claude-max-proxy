@@ -24,3 +24,74 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: bun run build
+
+  # Windows smoke test — catches platform-specific regressions in:
+  #   - claude-code postinstall on Windows (issue #445 class)
+  #   - the resolver picking up the bundled binary or platform-package binary (#417)
+  #   - cross-platform path handling in TS code
+  #   - bundle output spawning under node on Windows
+  # We don't run the full unit suite here — that's covered by the Linux job
+  # above and the resolver's logic is mock-driven so platform doesn't matter
+  # for unit-level coverage. This job exercises the REAL install + start flow.
+  windows-smoke:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - uses: oven-sh/setup-bun@v2
+
+      # Install — this also runs claude-code's postinstall, which is the
+      # single most common source of Windows install-time bugs.
+      - run: bun install
+
+      # Run only the resolver tests on Windows. Useful even though they use
+      # mocked deps, because the test runner itself exercises path joining,
+      # file URL parsing, etc., on the real Windows runtime.
+      - run: bun test src/__tests__/claude-executable-resolver.test.ts
+        shell: bash
+
+      # Build the bundle.
+      - run: bun run build
+        shell: bash
+
+      # Smoke-start: launch the bundled CLI in the background, hit /health,
+      # verify it responds with a body. We don't have Claude auth in CI, so
+      # the auth check inside /health may report loggedIn:false — that's
+      # fine; what we're verifying is the resolver finds the executable
+      # and the proxy boots without throwing.
+      - name: smoke start + /health probe
+        shell: pwsh
+        run: |
+          $env:MERIDIAN_PORT = "3458"
+          $env:MERIDIAN_HOST = "127.0.0.1"
+          # Start meridian in the background.
+          $proc = Start-Process -FilePath "node" -ArgumentList "dist/cli.js" -PassThru -RedirectStandardOutput "meridian.out.log" -RedirectStandardError "meridian.err.log" -WindowStyle Hidden
+          try {
+            # Poll /health up to 30s.
+            $ok = $false
+            for ($i = 0; $i -lt 30; $i++) {
+              Start-Sleep -Seconds 1
+              try {
+                $r = Invoke-WebRequest -Uri "http://127.0.0.1:3458/health" -UseBasicParsing -TimeoutSec 2
+                if ($r.StatusCode -eq 200) { $ok = $true; break }
+              } catch { }
+            }
+            if (-not $ok) {
+              Write-Host "===== meridian.out.log ====="
+              if (Test-Path "meridian.out.log") { Get-Content "meridian.out.log" }
+              Write-Host "===== meridian.err.log ====="
+              if (Test-Path "meridian.err.log") { Get-Content "meridian.err.log" }
+              throw "Meridian did not respond on /health within 30s — resolver or startup likely failed on Windows"
+            }
+            $body = Invoke-RestMethod -Uri "http://127.0.0.1:3458/health" -TimeoutSec 5
+            Write-Host "/health response: $($body | ConvertTo-Json -Compress)"
+            if (-not $body.version) { throw "/health missing version field" }
+            Write-Host "OK — meridian booted on Windows and /health returned a version."
+          }
+          finally {
+            try { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } catch { }
+          }

@@ -6,10 +6,22 @@
  */
 
 import { join } from "node:path"
-import { homedir } from "node:os"
 import type { Options, SdkBeta, SettingSource } from "@anthropic-ai/claude-agent-sdk"
 import { createOpencodeMcpServer } from "../mcpTools"
 import { createPassthroughMcpServer, PASSTHROUGH_MCP_NAME } from "./passthroughTools"
+
+/**
+ * Return a copy of `env` with `CLAUDE_CONFIG_DIR` removed. Used by the
+ * sharedMemory branch — see the comment at the env construction site.
+ *
+ * Pure function: never mutates the input.
+ */
+function stripConfigDir(env: Record<string, string | undefined>): Record<string, string | undefined> {
+  if (!("CLAUDE_CONFIG_DIR" in env)) return env
+  const out = { ...env }
+  delete out.CLAUDE_CONFIG_DIR
+  return out
+}
 
 export interface QueryContext {
   /** The prompt to send (text or async iterable for multimodal) */
@@ -235,11 +247,18 @@ export function buildQueryOptions(ctx: QueryContext): BuildQueryResult {
       } : {}),
       ...(onStderr ? { stderr: onStderr } : {}),
       env: {
-        ...cleanEnv,
+        // sharedMemory: the user wants the SDK to use Claude Code's default
+        // config dir so memories sync. Counter-intuitively we DON'T set
+        // CLAUDE_CONFIG_DIR=$HOME/.claude here — explicitly setting it (even
+        // to the default value) changes the SDK's Keychain lookup key and
+        // breaks OAuth (issue #453, upstream anthropics/claude-code#20553).
+        // Instead, strip any inherited custom CLAUDE_CONFIG_DIR from the
+        // profile env so the SDK falls back to its own default. That achieves
+        // the "share memory with Claude Code" intent without poisoning
+        // Keychain auth.
+        ...(sharedMemory ? stripConfigDir(cleanEnv) : cleanEnv),
         ENABLE_TOOL_SEARCH: hasDeferredTools ? "true" : "false",
         ...(passthrough ? { ENABLE_CLAUDEAI_MCP_SERVERS: "false" } : {}),
-        // Shared memory: point SDK at ~/.claude so memories are shared with Claude Code
-        ...(sharedMemory ? { CLAUDE_CONFIG_DIR: join(homedir(), ".claude") } : {}),
         // When running as root (Docker, Unraid, NAS), set IS_SANDBOX=1 to
         // bypass the SDK's root check. Without this, the SDK exits with:
         // "--dangerously-skip-permissions cannot be used with root/sudo"

@@ -7,6 +7,7 @@ import { join } from "node:path"
 import { query } from "@anthropic-ai/claude-agent-sdk"
 import { rateLimitStore } from "./rateLimitStore"
 import { fetchOAuthUsage } from "./oauthUsage"
+import { resolveSdkWorkingDirectory } from "./cwd"
 import type { Context } from "hono"
 import { DEFAULT_PROXY_CONFIG } from "./types"
 import { envBool } from "../env"
@@ -437,8 +438,24 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
         // so the model reports the user's real path. For same-host clients
         // (OpenCode, Crush) the adapter can leave extractClientWorkingDirectory
         // undefined and the two collapse to the same value.
-        const workingDirectory = (process.env.MERIDIAN_WORKDIR ?? process.env.CLAUDE_PROXY_WORKDIR) || adapter.extractWorkingDirectory(body) || process.cwd()
-        const clientWorkingDirectory = adapter.extractClientWorkingDirectory?.(body) || workingDirectory
+        //
+        // Issue #381 — when meridian runs on a remote host and the client is
+        // on another machine, the claimed cwd may not exist locally; the SDK
+        // would otherwise fail with a misleading "binary not found" error.
+        // resolveSdkWorkingDirectory falls back to process.cwd() in that case.
+        const cwdResolution = resolveSdkWorkingDirectory({
+          envOverride: process.env.MERIDIAN_WORKDIR ?? process.env.CLAUDE_PROXY_WORKDIR,
+          adapterCwd: adapter.extractWorkingDirectory(body),
+          fallback: process.cwd(),
+        })
+        const workingDirectory = cwdResolution.workingDirectory
+        if (cwdResolution.fellBack) {
+          claudeLog("cwd_fallback", {
+            claimed: cwdResolution.claimedWorkingDirectory,
+            usedInstead: workingDirectory,
+          })
+        }
+        const clientWorkingDirectory = adapter.extractClientWorkingDirectory?.(body) || cwdResolution.claimedWorkingDirectory
 
         // Strip env vars that would cause the SDK subprocess to loop back through
         // the proxy instead of using its native Claude Max auth. Also strip vars

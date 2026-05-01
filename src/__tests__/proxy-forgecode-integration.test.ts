@@ -8,7 +8,16 @@
  */
 
 import { describe, it, expect, mock, beforeEach, afterEach } from "bun:test"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { mkdirSync } from "node:fs"
 import { assistantMessage, textBlockStart, textDelta, blockStop, messageDelta, messageStop, messageStart } from "./helpers"
+
+// Use a real, existent directory so server.ts:resolveSdkWorkingDirectory's
+// existsSync check passes — otherwise the SDK cwd silently falls back to
+// process.cwd() (the fix for issue #381).
+const FORGECODE_PROJECT_DIR = join(tmpdir(), "meridian-test-forgecode-project")
+mkdirSync(FORGECODE_PROJECT_DIR, { recursive: true })
 
 let mockMessages: any[] = []
 let capturedQueryParams: any = null
@@ -50,7 +59,7 @@ const FORGECODE_BODY = {
   system: [
     {
       type: "text",
-      text: "<system_information>\n<operating_system>Darwin</operating_system>\n<current_working_directory>/Users/dev/my-project</current_working_directory>\n<default_shell>/bin/zsh</default_shell>\n<home_directory>/Users/dev</home_directory>\n</system_information>",
+      text: `<system_information>\n<operating_system>Darwin</operating_system>\n<current_working_directory>${FORGECODE_PROJECT_DIR}</current_working_directory>\n<default_shell>/bin/zsh</default_shell>\n<home_directory>/Users/dev</home_directory>\n</system_information>`,
     },
   ],
   messages: [{
@@ -73,7 +82,7 @@ const OPENCODE_BODY = {
   model: "claude-sonnet-4-5-20250929",
   max_tokens: 1024,
   stream: false,
-  system: "<env>\n  Working directory: /Users/dev/my-project\n</env>",
+  system: `<env>\n  Working directory: ${FORGECODE_PROJECT_DIR}\n</env>`,
   messages: [{ role: "user", content: "Hello" }],
 }
 
@@ -408,7 +417,7 @@ describe("ForgeCode adapter: CWD extraction through proxy", () => {
     // The proxy extracts CWD from the adapter and uses it for fingerprinting
     // and as the working directory for the SDK query
     expect(capturedQueryParams).toBeDefined()
-    expect(capturedQueryParams.options.cwd).toBe("/Users/dev/my-project")
+    expect(capturedQueryParams.options.cwd).toBe(FORGECODE_PROJECT_DIR)
   })
 })
 

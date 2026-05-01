@@ -10,7 +10,18 @@
  */
 
 import { describe, it, expect, mock, beforeEach, afterEach } from "bun:test"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { mkdirSync } from "node:fs"
 import { assistantMessage } from "./helpers"
+
+// Use real, existent directories so server.ts:resolveSdkWorkingDirectory's
+// existsSync check passes — otherwise the SDK cwd silently falls back to
+// process.cwd() (the fix for issue #381).
+const DROID_PROJECT_DIR = join(tmpdir(), "meridian-test-droid-project")
+const OPENCODE_PROJECT_DIR = join(tmpdir(), "meridian-test-opencode-project")
+mkdirSync(DROID_PROJECT_DIR, { recursive: true })
+mkdirSync(OPENCODE_PROJECT_DIR, { recursive: true })
 
 let mockMessages: any[] = []
 let capturedQueryParams: any = null
@@ -67,7 +78,7 @@ Model: claude-sonnet-4-5-20250514
 Today's date: 2026-03-29
 
 % pwd
-/Users/dev/my-project
+${DROID_PROJECT_DIR}
 
 % ls
 src package.json
@@ -102,7 +113,7 @@ const OPENCODE_BODY = {
   model: "claude-sonnet-4-5-20250929",
   max_tokens: 1024,
   stream: false,
-  system: "<env>\n  Working directory: /Users/dev/opencode-project\n</env>",
+  system: `<env>\n  Working directory: ${OPENCODE_PROJECT_DIR}\n</env>`,
   messages: [{ role: "user", content: "Hello" }],
   tools: [
     { name: "Read", description: "Read a file", input_schema: { type: "object", properties: {} } },
@@ -256,13 +267,13 @@ describe("Droid adapter: CWD extraction from system-reminder", () => {
     const app = createTestApp()
     await (await post(app, DROID_BODY, { "User-Agent": DROID_UA })).json()
     // The proxy passes cwd to the SDK options
-    expect(capturedQueryParams.options.cwd).toBe("/Users/dev/my-project")
+    expect(capturedQueryParams.options.cwd).toBe(DROID_PROJECT_DIR)
   })
 
   it("OpenCode uses CWD from env block in system prompt", async () => {
     const app = createTestApp()
     await (await post(app, OPENCODE_BODY)).json()
-    expect(capturedQueryParams.options.cwd).toBe("/Users/dev/opencode-project")
+    expect(capturedQueryParams.options.cwd).toBe(OPENCODE_PROJECT_DIR)
   })
 })
 

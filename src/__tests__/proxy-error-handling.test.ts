@@ -171,3 +171,69 @@ describe("Error classification", () => {
     expect(body.error.message).toContain("messages")
   })
 })
+
+describe("Empty messages array (regression #450)", () => {
+  beforeEach(() => {
+    mockError = null
+    clearSessionCache()
+  })
+
+  it("rejects empty messages array with 400 — cold-start safety, no RangeError crash", async () => {
+    // Before this guard, an empty messages array crashed the streaming
+    // controller with `RangeError: Invalid array length` because
+    // `new Array(allMessages.length - 1)` evaluated to `new Array(-1)`.
+    const app = createTestApp()
+    const res = await post(app, {
+      model: "claude-sonnet-4-5",
+      max_tokens: 1024,
+      stream: true,
+      messages: [], // explicitly empty
+    })
+    const body = await res.json()
+    expect(res.status).toBe(400)
+    expect(body.type).toBe("error")
+    expect(body.error.type).toBe("invalid_request_error")
+    expect(body.error.message).toContain("messages")
+    expect(body.error.message.toLowerCase()).toContain("empty")
+  })
+
+  it("rejects empty messages on non-streaming path too", async () => {
+    const app = createTestApp()
+    const res = await post(app, {
+      model: "claude-sonnet-4-5",
+      max_tokens: 1024,
+      stream: false,
+      messages: [],
+    })
+    const body = await res.json()
+    expect(res.status).toBe(400)
+    expect(body.error.type).toBe("invalid_request_error")
+  })
+
+  it("does not return 500 for cold-start empty-messages requests (was the bug)", async () => {
+    const app = createTestApp()
+    const res = await post(app, {
+      model: "claude-sonnet-4-5",
+      max_tokens: 1024,
+      stream: true,
+      messages: [],
+    })
+    // The exact behavior we want: clean 400, never the 500 cascade from
+    // RangeError: Invalid array length.
+    expect(res.status).not.toBe(500)
+  })
+
+  it("still accepts a single-message request (regression-adjacent)", async () => {
+    // Defensive: make sure the new guard doesn't reject the minimal valid
+    // case (one message). This is the smallest non-empty array and the most
+    // common cold-start shape after this fix.
+    const app = createTestApp()
+    const res = await post(app, {
+      model: "claude-sonnet-4-5",
+      max_tokens: 1024,
+      stream: false,
+      messages: [{ role: "user", content: "hi" }],
+    })
+    expect(res.status).toBe(200)
+  })
+})

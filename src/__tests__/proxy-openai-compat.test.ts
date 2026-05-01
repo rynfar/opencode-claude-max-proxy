@@ -580,3 +580,87 @@ describe("Regression: /v1/messages unaffected", () => {
     expect(res.status).toBe(400)
   })
 })
+
+// ---------------------------------------------------------------------------
+// Auth (issue #415): forward caller's auth headers on the internal hop
+// ---------------------------------------------------------------------------
+
+describe("POST /v1/chat/completions — MERIDIAN_API_KEY auth forwarding (#415)", () => {
+  const TEST_KEY = "test-key-415"
+  let savedKey: string | undefined
+
+  beforeEach(() => {
+    savedKey = process.env.MERIDIAN_API_KEY
+    process.env.MERIDIAN_API_KEY = TEST_KEY
+    mockMessages = [assistantMessage([{ type: "text", text: "ok" }])]
+    capturedPromptMessages = []
+    clearSessionCache()
+  })
+
+  // Manual restore — bun:test's afterEach isn't imported in this file's other suites,
+  // and we don't want to leak the env var into unrelated tests.
+  function restoreKey() {
+    if (savedKey === undefined) delete process.env.MERIDIAN_API_KEY
+    else process.env.MERIDIAN_API_KEY = savedKey
+  }
+
+  it("accepts a valid Authorization: Bearer header and reaches the SDK", async () => {
+    const app = createTestApp()
+    const res = await app.fetch(new Request("http://localhost/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${TEST_KEY}` },
+      body: JSON.stringify({
+        model: "claude-haiku-4-5-20251001",
+        messages: [{ role: "user", content: "hi" }],
+      }),
+    }))
+    restoreKey()
+    expect(res.status).toBe(200)
+    const body = await res.json() as Record<string, unknown>
+    expect(body.object).toBe("chat.completion")
+  })
+
+  it("accepts a valid x-api-key header and reaches the SDK", async () => {
+    const app = createTestApp()
+    const res = await app.fetch(new Request("http://localhost/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-api-key": TEST_KEY },
+      body: JSON.stringify({
+        model: "claude-haiku-4-5-20251001",
+        messages: [{ role: "user", content: "hi" }],
+      }),
+    }))
+    restoreKey()
+    expect(res.status).toBe(200)
+    const body = await res.json() as Record<string, unknown>
+    expect(body.object).toBe("chat.completion")
+  })
+
+  it("rejects requests with no auth header (regression guard against accidental bypass)", async () => {
+    const app = createTestApp()
+    const res = await app.fetch(new Request("http://localhost/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "claude-haiku-4-5-20251001",
+        messages: [{ role: "user", content: "hi" }],
+      }),
+    }))
+    restoreKey()
+    expect(res.status).toBe(401)
+  })
+
+  it("rejects requests with a wrong Bearer token", async () => {
+    const app = createTestApp()
+    const res = await app.fetch(new Request("http://localhost/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": "Bearer wrong-key" },
+      body: JSON.stringify({
+        model: "claude-haiku-4-5-20251001",
+        messages: [{ role: "user", content: "hi" }],
+      }),
+    }))
+    restoreKey()
+    expect(res.status).toBe(401)
+  })
+})

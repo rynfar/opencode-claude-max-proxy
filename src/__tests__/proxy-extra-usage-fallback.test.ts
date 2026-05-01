@@ -27,11 +27,15 @@ let mockBehavior: "extra_usage_then_succeed" | "always_extra_usage" | "succeed" 
 
 const EXTRA_USAGE_ERROR = "Claude Code returned an error result: API Error: Extra usage is required for 1M context · enable extra usage at claude.ai/settings/usage, or use --model to switch"
 
+// Pass through the real resolveSdkModelDefaults — mock.module is process-global
+// in Bun, and stubbing it as () => ({}) leaks to proxy-env-stripping.test.ts.
+import { resolveSdkModelDefaults } from "../proxy/models"
+
 // Force sonnet[1m] regardless of auth status so tests are self-contained.
 mock.module("../proxy/models", () => ({
   mapModelToClaudeModel: () => "sonnet[1m]",
   resolveClaudeExecutableAsync: async () => "claude",
-  resolveSdkModelDefaults: () => ({}),
+  resolveSdkModelDefaults,
   getClaudeAuthStatusAsync: async () => ({ loggedIn: true, subscriptionType: "max" }),
   hasExtendedContext: (model: string) => model.endsWith("[1m]"),
   stripExtendedContext: (model: string) => model.replace("[1m]", ""),

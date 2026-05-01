@@ -46,12 +46,18 @@ export const CANONICAL_HAIKU_MODEL = "claude-haiku-4-5"
  * Build the ANTHROPIC_DEFAULT_{TYPE}_MODEL env record to apply before the
  * inherited process env, so user-set shell values still win but unset
  * variables get Meridian's canonical pins.
+ *
+ * Accepts an optional `env` arg so unit tests can pass a synthetic env
+ * map instead of mutating process.env (which leaks between parallel
+ * test files).
  */
-export function resolveSdkModelDefaults(): Record<string, string> {
+export function resolveSdkModelDefaults(
+  env: NodeJS.ProcessEnv = process.env,
+): Record<string, string> {
   return {
-    ANTHROPIC_DEFAULT_OPUS_MODEL: process.env.MERIDIAN_DEFAULT_OPUS_MODEL ?? CANONICAL_OPUS_MODEL,
-    ANTHROPIC_DEFAULT_SONNET_MODEL: process.env.MERIDIAN_DEFAULT_SONNET_MODEL ?? CANONICAL_SONNET_MODEL,
-    ANTHROPIC_DEFAULT_HAIKU_MODEL: process.env.MERIDIAN_DEFAULT_HAIKU_MODEL ?? CANONICAL_HAIKU_MODEL,
+    ANTHROPIC_DEFAULT_OPUS_MODEL: env.MERIDIAN_DEFAULT_OPUS_MODEL ?? CANONICAL_OPUS_MODEL,
+    ANTHROPIC_DEFAULT_SONNET_MODEL: env.MERIDIAN_DEFAULT_SONNET_MODEL ?? CANONICAL_SONNET_MODEL,
+    ANTHROPIC_DEFAULT_HAIKU_MODEL: env.MERIDIAN_DEFAULT_HAIKU_MODEL ?? CANONICAL_HAIKU_MODEL,
   }
 }
 export interface ClaudeAuthStatus {

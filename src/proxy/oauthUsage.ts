@@ -132,8 +132,12 @@ async function readAccessToken(store: CredentialStore): Promise<string | null> {
   return creds?.claudeAiOauth?.accessToken ?? null
 }
 
-async function callAnthropic(token: string, signal?: AbortSignal): Promise<RawOAuthUsageResponse | { __status: number }> {
-  const res = await fetch(OAUTH_USAGE_URL, {
+async function callAnthropic(
+  token: string,
+  fetchImpl: typeof globalThis.fetch,
+  signal?: AbortSignal,
+): Promise<RawOAuthUsageResponse | { __status: number }> {
+  const res = await fetchImpl(OAUTH_USAGE_URL, {
     headers: {
       Authorization: `Bearer ${token}`,
       "anthropic-beta": OAUTH_BETA_HEADER,
@@ -143,6 +147,34 @@ async function callAnthropic(token: string, signal?: AbortSignal): Promise<RawOA
   })
   if (!res.ok) return { __status: res.status }
   return (await res.json()) as RawOAuthUsageResponse
+}
+
+export interface FetchOAuthUsageOpts {
+  ttlMs?: number
+  force?: boolean
+  store?: CredentialStore
+  profileId?: string | null
+  claudeConfigDir?: string
+  fetchImpl?: typeof globalThis.fetch
+}
+
+/**
+ * Test-only override. When set, server.ts callers (which don't pass `store`
+ * or `fetchImpl`) get this fake instead of hitting Anthropic. Callers that
+ * pass either `store` or `fetchImpl` (oauth-usage unit tests) bypass the
+ * override entirely, so unit tests of this module aren't affected by the
+ * route tests' override.
+ *
+ * Use this instead of `mock.module()` — Bun's module mocks are process-
+ * global and would leak across parallel test files.
+ */
+let _testOverride: ((opts?: FetchOAuthUsageOpts) => Promise<OAuthUsageSnapshot | null>) | null = null
+
+/** Test-only setter. Pass `null` to clear. */
+export function __setFetchOAuthUsageOverride(
+  fn: ((opts?: FetchOAuthUsageOpts) => Promise<OAuthUsageSnapshot | null>) | null,
+): void {
+  _testOverride = fn
 }
 
 /**
@@ -162,16 +194,22 @@ async function callAnthropic(token: string, signal?: AbortSignal): Promise<RawOA
  * @param claudeConfigDir When provided, reads credentials from this dir's
  *                        keychain entry (macOS) or `.credentials.json`
  *                        (Linux) instead of the platform default.
+ * @param fetchImpl       Override the fetch implementation (for testing).
+ *                        Defaults to globalThis.fetch.
  */
-export async function fetchOAuthUsage(opts?: {
-  ttlMs?: number
-  force?: boolean
-  store?: CredentialStore
-  profileId?: string | null
-  claudeConfigDir?: string
-}): Promise<OAuthUsageSnapshot | null> {
+export async function fetchOAuthUsage(opts?: FetchOAuthUsageOpts): Promise<OAuthUsageSnapshot | null> {
+  // If the caller injected real test deps, run the real impl. This keeps
+  // oauth-usage unit tests isolated from any test-set _testOverride.
+  if (_testOverride && !opts?.fetchImpl && !opts?.store) {
+    return _testOverride(opts)
+  }
+  return fetchOAuthUsageImpl(opts)
+}
+
+async function fetchOAuthUsageImpl(opts?: FetchOAuthUsageOpts): Promise<OAuthUsageSnapshot | null> {
   const ttl = opts?.ttlMs ?? CACHE_TTL_MS_DEFAULT
   const cacheKey = opts?.profileId ?? DEFAULT_KEY
+  const fetchImpl = opts?.fetchImpl ?? globalThis.fetch
 
   if (!opts?.force) {
     const cached = cacheByProfile.get(cacheKey)
@@ -187,7 +225,7 @@ export async function fetchOAuthUsage(opts?: {
       const token = await readAccessToken(store)
       if (!token) return null
 
-      let result = await callAnthropic(token)
+      let result = await callAnthropic(token, fetchImpl)
       if ("__status" in result && result.__status === 401) {
         claudeLog("oauth_usage.token_refresh_attempt", { profile: cacheKey })
         const refreshed = await refreshOAuthToken(store)
@@ -197,7 +235,7 @@ export async function fetchOAuthUsage(opts?: {
         }
         const newToken = await readAccessToken(store)
         if (!newToken) return null
-        result = await callAnthropic(newToken)
+        result = await callAnthropic(newToken, fetchImpl)
       }
       if ("__status" in result) {
         claudeLog("oauth_usage.upstream_error", { profile: cacheKey, status: result.__status })

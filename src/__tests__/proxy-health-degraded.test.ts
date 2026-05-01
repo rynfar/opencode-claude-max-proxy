@@ -7,11 +7,17 @@
  */
 
 import { describe, it, expect, mock } from "bun:test"
+// Static import of the real resolveSdkModelDefaults BEFORE mock.module(). This
+// pulls the real impl (the static import is hoisted) so we can pass it through
+// the mocked module unchanged. mock.module() in Bun is process-global; if we
+// stubbed it as () => ({}) it would leak to proxy-env-stripping.test.ts running
+// in parallel and break its model-pin assertions.
+import { resolveSdkModelDefaults } from "../proxy/models"
 
 mock.module("../proxy/models", () => ({
   getClaudeAuthStatusAsync: async () => null,
   resolveClaudeExecutableAsync: async () => "claude",
-  resolveSdkModelDefaults: () => ({}),
+  resolveSdkModelDefaults,
   mapModelToClaudeModel: (model: string) => {
     if (model.toLowerCase().includes("opus")) return "opus"
     if (model.toLowerCase().includes("haiku")) return "haiku"

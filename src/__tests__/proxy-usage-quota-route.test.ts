@@ -6,7 +6,7 @@
  * have been recorded, and filters out the internal "default" bucket.
  */
 
-import { describe, it, expect, mock, beforeEach } from "bun:test"
+import { describe, it, expect, mock, beforeEach, afterEach } from "bun:test"
 
 mock.module("@anthropic-ai/claude-agent-sdk", () => ({
   query: () => (async function* () {})(),
@@ -23,13 +23,13 @@ mock.module("../mcpTools", () => ({
   createOpencodeMcpServer: () => ({ type: "sdk", name: "opencode", instance: {} }),
 }))
 
-// By default, mock OAuth usage to null so tests exercise the SDK-only path.
-// Tests that exercise OAuth merge override this mock locally.
-mock.module("../proxy/oauthUsage", () => ({
-  fetchOAuthUsage: async () => null,
-  resetOAuthUsageCache: () => {},
-}))
-
+// Use the module-level override (`__setFetchOAuthUsageOverride`) instead of
+// `mock.module()`. Bun's mock.module is process-global and would replace the
+// real `fetchOAuthUsage` for every parallel test file (including
+// oauth-usage.test.ts, where 10 tests would flake with `result === null`).
+// The override is bypassed when the caller passes `store` or `fetchImpl`,
+// keeping oauth-usage unit tests isolated.
+const { __setFetchOAuthUsageOverride } = await import("../proxy/oauthUsage")
 const { createProxyServer } = await import("../proxy/server")
 const { rateLimitStore } = await import("../proxy/rateLimitStore")
 
@@ -54,6 +54,14 @@ interface QuotaResponse {
 describe("GET /v1/usage/quota", () => {
   beforeEach(() => {
     rateLimitStore.clear()
+    // Default: no OAuth data merged in. Individual tests override.
+    __setFetchOAuthUsageOverride(async () => null)
+  })
+
+  afterEach(() => {
+    // Clear so the override doesn't leak into other test files in the same
+    // bun process (e.g. tests that exercise the real /v1/usage/quota path).
+    __setFetchOAuthUsageOverride(null)
   })
 
   it("returns 200 with empty buckets and a freshness timestamp on cold start", async () => {
@@ -149,22 +157,16 @@ describe("GET /v1/usage/quota", () => {
   })
 
   it("merges OAuth-sourced buckets onto SDK buckets, OAuth wins for utilization/resetsAt", async () => {
-    // Override the default null mock for this test only.
-    mock.module("../proxy/oauthUsage", () => ({
-      fetchOAuthUsage: async () => ({
-        windows: [
-          { type: "five_hour", utilization: 0.36, resetsAt: 1_730_111_111_111 },
-          { type: "seven_day", utilization: 0.05, resetsAt: 1_730_222_222_222 },
-          { type: "seven_day_omelette", utilization: 0.01, resetsAt: 1_730_333_333_333 },
-        ],
-        extraUsage: { isEnabled: true, monthlyLimit: 0, usedCredits: 23630, utilization: null, currency: "USD" },
-        fetchedAt: 1_730_000_000_000,
-      }),
-      resetOAuthUsageCache: () => {},
+    // Override only for this test — afterEach clears it.
+    __setFetchOAuthUsageOverride(async () => ({
+      windows: [
+        { type: "five_hour", utilization: 0.36, resetsAt: 1_730_111_111_111 },
+        { type: "seven_day", utilization: 0.05, resetsAt: 1_730_222_222_222 },
+        { type: "seven_day_omelette", utilization: 0.01, resetsAt: 1_730_333_333_333 },
+      ],
+      extraUsage: { isEnabled: true, monthlyLimit: 0, usedCredits: 23630, utilization: null, currency: "USD" },
+      fetchedAt: 1_730_000_000_000,
     }))
-    // The createProxyServer factory captures `fetchOAuthUsage` lazily via
-    // ES module live binding, so the route picks up the new mock without
-    // needing to re-import.
     const { app } = createProxyServer({ port: 0, host: "127.0.0.1" })
 
     // SDK has its own bucket for five_hour with overage info we want preserved.
@@ -197,11 +199,7 @@ describe("GET /v1/usage/quota", () => {
     expect(body.extraUsage).toBeDefined()
     expect(body.extraUsage!.usedCredits).toBe(23630)
 
-    // Reset module mock for any subsequent tests
-    mock.module("../proxy/oauthUsage", () => ({
-      fetchOAuthUsage: async () => null,
-      resetOAuthUsageCache: () => {},
-    }))
+    // afterEach handles cleanup.
   })
 
   it("preserves overage fields when present", async () => {

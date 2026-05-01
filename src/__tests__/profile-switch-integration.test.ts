@@ -29,11 +29,15 @@ mock.module("../logger", () => ({
   withClaudeLogContext: (_ctx: unknown, fn: () => unknown) => fn(),
 }))
 
+// Pass through the real resolveSdkModelDefaults — mock.module is process-global
+// in Bun, and stubbing it as () => ({}) leaks to proxy-env-stripping.test.ts.
+import { resolveSdkModelDefaults } from "../proxy/models"
+
 // Mock models to avoid real auth checks
 mock.module("../proxy/models", () => ({
   mapModelToClaudeModel: () => "sonnet",
   resolveClaudeExecutableAsync: async () => "claude",
-  resolveSdkModelDefaults: () => ({}),
+  resolveSdkModelDefaults,
   getClaudeAuthStatusAsync: async () => ({ loggedIn: true, email: "test@test.com", subscriptionType: "max" }),
   getAuthCacheInfo: () => ({ lastCheckedAt: 0, lastSuccessAt: 0, isFailure: false }),
   hasExtendedContext: () => false,

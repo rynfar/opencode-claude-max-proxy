@@ -41,18 +41,20 @@ function makeStore(token: string | null): CredentialStore {
   }
 }
 
+type FetchLike = (input: string, init?: RequestInit) => Promise<Response>
+
 /** Build a per-test fetch impl that returns the given Response. */
-function fixedFetch(builder: () => Response): typeof globalThis.fetch {
-  return (async () => builder()) as typeof globalThis.fetch
+function fixedFetch(builder: () => Response): FetchLike {
+  return async () => builder()
 }
 
 /** Build a per-test fetch impl that increments a counter on every call. */
-function countingFetch(builder: (calls: number) => Response): { fetchImpl: typeof globalThis.fetch; getCalls: () => number } {
+function countingFetch(builder: (calls: number) => Response): { fetchImpl: FetchLike; getCalls: () => number } {
   let calls = 0
-  const fetchImpl = (async () => {
+  const fetchImpl: FetchLike = async () => {
     calls++
     return builder(calls)
-  }) as typeof globalThis.fetch
+  }
   return { fetchImpl, getCalls: () => calls }
 }
 

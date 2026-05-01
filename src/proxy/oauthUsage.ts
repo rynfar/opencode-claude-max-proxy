@@ -132,9 +132,13 @@ async function readAccessToken(store: CredentialStore): Promise<string | null> {
   return creds?.claudeAiOauth?.accessToken ?? null
 }
 
+/** Minimal fetch shape used by callAnthropic. Avoids `typeof fetch`'s
+ *  `preconnect` property, which makes test casts unwieldy. */
+type FetchLike = (input: string, init?: RequestInit) => Promise<Response>
+
 async function callAnthropic(
   token: string,
-  fetchImpl: typeof globalThis.fetch,
+  fetchImpl: FetchLike,
   signal?: AbortSignal,
 ): Promise<RawOAuthUsageResponse | { __status: number }> {
   const res = await fetchImpl(OAUTH_USAGE_URL, {
@@ -155,7 +159,7 @@ export interface FetchOAuthUsageOpts {
   store?: CredentialStore
   profileId?: string | null
   claudeConfigDir?: string
-  fetchImpl?: typeof globalThis.fetch
+  fetchImpl?: FetchLike
 }
 
 /**

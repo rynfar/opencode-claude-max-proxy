@@ -1127,6 +1127,19 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
                   lastStopReason = message.message.stop_reason
                 }
               }
+              // The SDK emits a `result` message at the end of every non-streaming
+              // request with the authoritative aggregate usage across all internal
+              // iterations (top-level output_tokens is the sum, plus an
+              // iterations[] breakdown). The per-assistant-message usage only
+              // reports the LAST iteration's snapshot — which produces visibly
+              // wrong output_tokens (typically 1) for any non-trivial response.
+              // Prefer the result usage when present. See issue #449.
+              if (message.type === "result") {
+                const resultUsage = (message as { usage?: unknown }).usage as TokenUsage | undefined
+                if (resultUsage) {
+                  lastUsage = { ...lastUsage, ...resultUsage }
+                }
+              }
             }
 
             claudeLog("upstream.completed", {

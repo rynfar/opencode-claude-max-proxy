@@ -1,7 +1,7 @@
 /**
  * Tests for the Droid (Factory AI) agent adapter.
  */
-import { describe, it, expect } from "bun:test"
+import { describe, it, expect, beforeEach, afterEach } from "bun:test"
 import { droidAdapter } from "../proxy/adapters/droid"
 
 // Actual system-reminder content captured from a live Droid session
@@ -289,7 +289,43 @@ describe("droidAdapter.buildSystemContextAddendum", () => {
 })
 
 describe("droidAdapter.usesPassthrough", () => {
-  it("always returns false — Droid uses internal mode regardless of env var", () => {
+  // Save/restore env vars per test so global state doesn't leak.
+  let savedMP: string | undefined
+  let savedCP: string | undefined
+  beforeEach(() => {
+    savedMP = process.env.MERIDIAN_PASSTHROUGH
+    savedCP = process.env.CLAUDE_PROXY_PASSTHROUGH
+    delete process.env.MERIDIAN_PASSTHROUGH
+    delete process.env.CLAUDE_PROXY_PASSTHROUGH
+  })
+  afterEach(() => {
+    if (savedMP !== undefined) process.env.MERIDIAN_PASSTHROUGH = savedMP
+    else delete process.env.MERIDIAN_PASSTHROUGH
+    if (savedCP !== undefined) process.env.CLAUDE_PROXY_PASSTHROUGH = savedCP
+    else delete process.env.CLAUDE_PROXY_PASSTHROUGH
+  })
+
+  it("returns false by default (no env var) — internal mode is the safe default", () => {
+    expect(droidAdapter.usesPassthrough!()).toBe(false)
+  })
+
+  it("returns true when MERIDIAN_PASSTHROUGH=1 — opt-in unlock", () => {
+    process.env.MERIDIAN_PASSTHROUGH = "1"
+    expect(droidAdapter.usesPassthrough!()).toBe(true)
+  })
+
+  it("respects CLAUDE_PROXY_PASSTHROUGH as an alias", () => {
+    process.env.CLAUDE_PROXY_PASSTHROUGH = "true"
+    expect(droidAdapter.usesPassthrough!()).toBe(true)
+  })
+
+  it("returns false for explicit MERIDIAN_PASSTHROUGH=0", () => {
+    process.env.MERIDIAN_PASSTHROUGH = "0"
+    expect(droidAdapter.usesPassthrough!()).toBe(false)
+  })
+
+  it("returns false for unrecognized env values", () => {
+    process.env.MERIDIAN_PASSTHROUGH = "maybe"
     expect(droidAdapter.usesPassthrough!()).toBe(false)
   })
 })

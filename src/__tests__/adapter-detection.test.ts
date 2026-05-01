@@ -330,9 +330,25 @@ describe("detectAdapter — adapter contracts", () => {
     expect(adapter.getMcpServerName()).toBe("opencode")
   })
 
-  it("detected droid adapter always returns false for usesPassthrough", () => {
+  it("detected droid adapter respects env for usesPassthrough — opt-in default off", () => {
     const adapter = detectAdapter(makeContext("factory-cli/0.89.0"))
-    expect(adapter.usesPassthrough!()).toBe(false)
+    expect(typeof adapter.usesPassthrough).toBe("function")
+    const savedMP = process.env.MERIDIAN_PASSTHROUGH
+    const savedCP = process.env.CLAUDE_PROXY_PASSTHROUGH
+    try {
+      delete process.env.MERIDIAN_PASSTHROUGH
+      delete process.env.CLAUDE_PROXY_PASSTHROUGH
+      // Default: off (preserves prior behavior for users without the env var)
+      expect(adapter.usesPassthrough!()).toBe(false)
+      // Opt-in: on
+      process.env.MERIDIAN_PASSTHROUGH = "1"
+      expect(adapter.usesPassthrough!()).toBe(true)
+    } finally {
+      if (savedMP !== undefined) process.env.MERIDIAN_PASSTHROUGH = savedMP
+      else delete process.env.MERIDIAN_PASSTHROUGH
+      if (savedCP !== undefined) process.env.CLAUDE_PROXY_PASSTHROUGH = savedCP
+      else delete process.env.CLAUDE_PROXY_PASSTHROUGH
+    }
   })
 
   it("detected opencode adapter has no usesPassthrough — defers to env var", () => {

@@ -123,16 +123,21 @@ export const droidAdapter: AgentAdapter = {
   },
 
   /**
-   * Droid always uses internal mode — the proxy executes tools via the
-   * mcp__droid__* MCP server rather than forwarding tool_use blocks back
-   * to Droid. This overrides CLAUDE_PROXY_PASSTHROUGH for Droid requests.
+   * Droid passthrough is env-controlled, defaulting to OFF.
    *
-   * Why: Droid's TUI via BYOK does not complete the passthrough tool
-   * execution loop (sending tool_results back), so Claude hallucinates
-   * from context instead of actually reading files.
+   * Set `MERIDIAN_PASSTHROUGH=1` (or `CLAUDE_PROXY_PASSTHROUGH=1`) to enable.
+   *
+   * History: this used to hardcode `false` because Droid's BYOK didn't close
+   * the tool execution loop — Claude would see no `tool_result` come back
+   * and hallucinate file contents. Verified working on Droid v0.114.1
+   * (tool_use → tool_result roundtrip completes correctly). Default stays
+   * OFF so existing users see no behavior change; explicit env opt-in
+   * unlocks passthrough for those who want it (better real-time TUI
+   * streaming, no internal SDK loop hallucination on long contexts).
    */
   usesPassthrough(): boolean {
-    return false
+    const envVal = process.env.MERIDIAN_PASSTHROUGH ?? process.env.CLAUDE_PROXY_PASSTHROUGH
+    return envVal === "1" || envVal === "true" || envVal === "yes"
   },
 }
 

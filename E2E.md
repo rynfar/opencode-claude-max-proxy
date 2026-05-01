@@ -4,7 +4,7 @@ Live tests against the real proxy + Claude Max SDK. These verify the full reques
 
 **Prerequisites:** Claude Max subscription, `claude auth status` shows `loggedIn: true`, `opencode` installed.
 
-> **Droid tests (D1–D10)** additionally require `droid` installed (`droid --version` ≥ 0.89.0) and a Factory AI account for BYOK configuration.
+> **Droid tests (D1–D10)** additionally require `droid` installed (`droid --version` ≥ 0.89.0) and a Factory AI account for BYOK configuration. Tests D1–D10 cover internal mode (the default). Passthrough mode for Droid is opt-in via `MERIDIAN_PASSTHROUGH=1` and requires `droid` ≥ 0.109 — see "Droid passthrough mode" below.
 
 ## Quick Start
 
@@ -47,12 +47,12 @@ kill $(lsof -ti :3456)
 | E20 | [Env Stripping](#e20-env-stripping) | ANTHROPIC_* vars don't leak to SDK subprocess | 2026-03-24 |
 | E21 | [Session Store Pruning](#e21-session-store-pruning) | File store respects count cap, oldest entries evicted | 2026-03-24 |
 | D1 | [Droid: Basic Response](#d1-droid-basic-response) | Proxy accepts Droid User-Agent, routes via droid adapter, returns valid response | 2026-03-29 |
-| D2 | [Droid: MCP Server Name](#d2-droid-mcp-server-name) | Tools use `mcp__droid__` prefix, not `mcp__opencode__` | 2026-03-29 |
+| D2 | [Droid: MCP Server Name](#d2-droid-mcp-server-name) | Internal mode: tools use `mcp__droid__` prefix, not `mcp__opencode__` | 2026-03-29 |
 | D3 | [Droid: OpenCode Backward Compat](#d3-droid-opencode-backward-compat) | Requests without Droid UA still use opencode adapter | 2026-03-29 |
 | D4 | [Droid: CWD from system-reminder](#d4-droid-cwd-from-system-reminder) | Working directory extracted from `<system-reminder>` block | 2026-03-29 |
 | D5 | [Droid: Fingerprint Session Resume](#d5-droid-fingerprint-session-resume) | Session continues via fingerprint (no session header needed) | 2026-03-29 |
 | D6 | [Droid: Real Binary Basic](#d6-droid-real-binary-basic) | Live `droid exec` → proxy → Claude Max returns correct response | 2026-03-29 |
-| D7 | [Droid: Real Binary Tool Use](#d7-droid-real-binary-tool-use) | Live `droid exec` reads file via `mcp__droid__read` | 2026-03-29 |
+| D7 | [Droid: Real Binary Tool Use](#d7-droid-real-binary-tool-use) | Internal mode: live `droid exec` reads file via `mcp__droid__read` | 2026-03-29 |
 | D8 | [Droid: exec Session Isolation](#d8-droid-exec-session-isolation) | Each `droid exec` call is a fresh session (expected — no history passed) | 2026-03-29 |
 | D9 | [Droid: Streaming SSE](#d9-droid-streaming-sse) | SSE stream correct format with Droid User-Agent | 2026-03-29 |
 | D10 | [Droid: OpenCode Session Unaffected](#d10-droid-opencode-session-unaffected) | OpenCode header-based session tracking still works alongside Droid | 2026-03-29 |
@@ -1359,6 +1359,15 @@ Which proxy modules each E2E test exercises:
 ## Droid (Factory AI) Tests
 
 These tests verify the Droid adapter added in the Droid support release. They require `droid` CLI installed and a Factory AI account.
+
+### Droid passthrough mode
+
+Droid's passthrough behavior is **env-controlled, defaulting to OFF**:
+
+- **Without `MERIDIAN_PASSTHROUGH`** (default): Droid runs in internal mode. The proxy executes tools via the `mcp__droid__*` MCP server and Claude sees results via the SDK's internal tool loop. This is what tests D1–D10 cover.
+- **With `MERIDIAN_PASSTHROUGH=1`** (or `CLAUDE_PROXY_PASSTHROUGH=1`): the proxy forwards `tool_use` blocks to Droid, Droid executes the tools locally, and sends `tool_result` back. Requires Droid ≥ 0.109 (earlier versions had a BYOK loop bug where `tool_result` wasn't delivered).
+
+Historical note: this used to be hardcoded to internal mode for Droid because of the BYOK loop bug. Verified working on Droid 0.114.1 — `tool_use` → `tool_result` roundtrip completes correctly. See `src/__tests__/droid-adapter.test.ts` and `src/__tests__/proxy-droid-integration.test.ts` for the unit-level coverage of the env-controlled behavior.
 
 ### Droid BYOK Setup
 

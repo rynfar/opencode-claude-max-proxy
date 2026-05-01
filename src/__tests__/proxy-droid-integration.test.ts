@@ -23,7 +23,14 @@ mock.module("@anthropic-ai/claude-agent-sdk", () => ({
       for (const msg of mockMessages) yield msg
     })()
   },
-  createSdkMcpServer: () => ({ type: "sdk", name: "test", instance: {} }),
+  // Provide tool()/registerTool() on the instance so passthrough-mode setup
+  // (which registers the dynamic mcp__droid__* tool surface) doesn't crash
+  // when the env var enables it.
+  createSdkMcpServer: () => ({
+    type: "sdk",
+    name: "test",
+    instance: { tool: () => {}, registerTool: () => ({}) },
+  }),
   tool: () => ({}),
 }))
 
@@ -344,10 +351,10 @@ describe("Droid adapter: response format", () => {
   })
 })
 
-describe("Droid adapter: always internal mode (usesPassthrough=false)", () => {
+describe("Droid adapter: passthrough is env-controlled, defaults off", () => {
   beforeEach(() => {
     savedPassthrough = process.env.MERIDIAN_PASSTHROUGH
-    process.env.MERIDIAN_PASSTHROUGH = "0"
+    delete process.env.MERIDIAN_PASSTHROUGH
     mockMessages = [assistantMessage([{ type: "text", text: "Done" }])]
     capturedQueryParams = null
     clearSessionCache()
@@ -358,39 +365,51 @@ describe("Droid adapter: always internal mode (usesPassthrough=false)", () => {
     else delete process.env.MERIDIAN_PASSTHROUGH
   })
 
-  it("Droid requests use internal MCP server even when CLAUDE_PROXY_PASSTHROUGH=1", async () => {
-    // Simulate the launchd environment where PASSTHROUGH is set globally
+  it("without env var, Droid uses internal mode — preserves prior default", async () => {
+    const app = createTestApp()
+    await (await post(app, DROID_BODY, { "User-Agent": DROID_UA })).json()
+
+    // Internal mode: allowedTools use mcp__droid__ prefix, maxTurns is 200.
+    const allowedTools: string[] = capturedQueryParams.options.allowedTools
+    expect(allowedTools).toBeDefined()
+    for (const tool of allowedTools) {
+      expect(tool).toStartWith("mcp__droid__")
+    }
+    expect(capturedQueryParams.options.maxTurns).toBe(200)
+  })
+
+  it("with MERIDIAN_PASSTHROUGH=1, Droid uses passthrough mode", async () => {
+    process.env.MERIDIAN_PASSTHROUGH = "1"
+    const app = createTestApp()
+    await (await post(app, DROID_BODY, { "User-Agent": DROID_UA })).json()
+
+    // Passthrough mode: maxTurns drops out of the 200 internal default. Exact
+    // value depends on resume/deferred/advisor flags (see computePassthroughMaxTurns
+    // in query.ts), but it is always < 200 in passthrough mode.
+    expect(capturedQueryParams.options.maxTurns).toBeLessThan(200)
+  })
+
+  it("with CLAUDE_PROXY_PASSTHROUGH=1 (alias), Droid uses passthrough mode", async () => {
     const original = process.env.CLAUDE_PROXY_PASSTHROUGH
     process.env.CLAUDE_PROXY_PASSTHROUGH = "1"
-
     try {
       const app = createTestApp()
       await (await post(app, DROID_BODY, { "User-Agent": DROID_UA })).json()
-
-      // Droid adapter's usesPassthrough()=false overrides the env var:
-      // allowedTools use mcp__droid__ prefix (internal mode), not passthrough MCP
-      const allowedTools: string[] = capturedQueryParams.options.allowedTools
-      expect(allowedTools).toBeDefined()
-      for (const tool of allowedTools) {
-        expect(tool).toStartWith("mcp__droid__")
-      }
-      // maxTurns is 200 (internal), not 1 (passthrough)
-      expect(capturedQueryParams.options.maxTurns).toBe(200)
+      expect(capturedQueryParams.options.maxTurns).toBeLessThan(200)
     } finally {
       if (original === undefined) delete process.env.CLAUDE_PROXY_PASSTHROUGH
       else process.env.CLAUDE_PROXY_PASSTHROUGH = original
     }
   })
 
-  it("openCodeAdapter.usesPassthrough is undefined — verified at adapter unit level, not integration level", () => {
-    // The openCodeAdapter now implements usesPassthrough() and defaults to true
-    // (passthrough mode) unless MERIDIAN_PASSTHROUGH=0 is set.
-    // Full passthrough integration is covered by proxy-passthrough-concept.test.ts.
-    // Here we just confirm the adapter contract at the unit level.
+  it("openCodeAdapter.usesPassthrough is unaffected by Droid changes", () => {
+    // The openCodeAdapter independently implements usesPassthrough() and
+    // defaults to true (passthrough on) unless MERIDIAN_PASSTHROUGH=0 is set.
+    // Confirm we did not accidentally regress its contract while editing Droid.
     const { openCodeAdapter } = require("../proxy/adapters/opencode")
     expect(typeof openCodeAdapter.usesPassthrough).toBe("function")
-    // With MERIDIAN_PASSTHROUGH=0 set in beforeEach, it returns false
-    expect(openCodeAdapter.usesPassthrough()).toBe(false)
+    // With env unset (beforeEach cleared it), opencode default is true
+    expect(openCodeAdapter.usesPassthrough()).toBe(true)
   })
 })
 

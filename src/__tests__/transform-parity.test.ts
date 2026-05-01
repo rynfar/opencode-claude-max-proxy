@@ -1,4 +1,4 @@
-import { describe, it, expect } from "bun:test"
+import { describe, it, expect, beforeEach, afterEach } from "bun:test"
 import { createRequestContext, runTransformHook } from "../proxy/transform"
 import { openCodeTransforms } from "../proxy/transforms/opencode"
 import { crushTransforms } from "../proxy/transforms/crush"
@@ -112,9 +112,33 @@ describe("Crush transform parity", () => {
 })
 
 describe("Droid transform parity", () => {
-  it("matches passthrough (always false)", () => {
+  // Save/restore env so the parity assertion isn't sensitive to ambient state.
+  let savedMP: string | undefined
+  let savedCP: string | undefined
+  beforeEach(() => {
+    savedMP = process.env.MERIDIAN_PASSTHROUGH
+    savedCP = process.env.CLAUDE_PROXY_PASSTHROUGH
+  })
+  afterEach(() => {
+    if (savedMP !== undefined) process.env.MERIDIAN_PASSTHROUGH = savedMP
+    else delete process.env.MERIDIAN_PASSTHROUGH
+    if (savedCP !== undefined) process.env.CLAUDE_PROXY_PASSTHROUGH = savedCP
+    else delete process.env.CLAUDE_PROXY_PASSTHROUGH
+  })
+
+  it("matches passthrough (env off → false)", () => {
+    delete process.env.MERIDIAN_PASSTHROUGH
+    delete process.env.CLAUDE_PROXY_PASSTHROUGH
     const ctx = runTransformHook(droidTransforms, "onRequest", makeCtx("droid"), "droid")
     expect(ctx.passthrough).toBe(droidAdapter.usesPassthrough!())
+    expect(ctx.passthrough).toBe(false)
+  })
+
+  it("matches passthrough (env on → true)", () => {
+    process.env.MERIDIAN_PASSTHROUGH = "1"
+    const ctx = runTransformHook(droidTransforms, "onRequest", makeCtx("droid"), "droid")
+    expect(ctx.passthrough).toBe(droidAdapter.usesPassthrough!())
+    expect(ctx.passthrough).toBe(true)
   })
 
   it("matches leaksCwdViaSystemReminder", () => {

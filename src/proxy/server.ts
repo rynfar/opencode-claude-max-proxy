@@ -442,12 +442,23 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
 
         // Strip env vars that would cause the SDK subprocess to loop back through
         // the proxy instead of using its native Claude Max auth. Also strip vars
-        // that cause unwanted SDK plugin/feature loading.
+        // that cause unwanted SDK plugin/feature loading or expose Claude-Code-
+        // host-only tools that downstream agents (OpenCode, Crush, Droid, etc.)
+        // cannot execute.
         const {
-          CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS,
+          // Strips infinite loop / wrong-auth conditions:
           ANTHROPIC_API_KEY: _dropApiKey,
           ANTHROPIC_BASE_URL: _dropBaseUrl,
           ANTHROPIC_AUTH_TOKEN: _dropAuthToken,
+          // Strips unwanted SDK plugin/feature loading:
+          CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS,
+          // Strips Claude-Code-only tools that other agents can't execute.
+          // CLAUDE_CODE_USE_POWERSHELL_TOOL=1 makes the SDK register a
+          // `PowerShell` tool the model can call. OpenCode (and other clients)
+          // expose `bash` instead and reject `PowerShell` as an unavailable
+          // tool. Setting it to "0" doesn't help — the var has to be removed
+          // entirely. See issue #441.
+          CLAUDE_CODE_USE_POWERSHELL_TOOL: _dropUsePowershell,
           ...cleanEnv
         } = process.env
 

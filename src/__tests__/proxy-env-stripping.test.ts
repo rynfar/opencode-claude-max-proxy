@@ -149,6 +149,29 @@ describe("Environment variable stripping", () => {
     delete process.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS
   })
 
+  // Regression: #441 — Claude calls SDK-only `PowerShell` tool that OpenCode
+  // can't execute. Triggered by `CLAUDE_CODE_USE_POWERSHELL_TOOL=1` inherited
+  // from settings.json or shell env. Setting to "0" doesn't help — the var
+  // must be removed entirely.
+  it("should strip CLAUDE_CODE_USE_POWERSHELL_TOOL=1 (regression #441)", async () => {
+    process.env.CLAUDE_CODE_USE_POWERSHELL_TOOL = "1"
+    const app = createTestApp()
+    await post(app, BASIC_REQUEST)
+    expect(capturedQueryOptions.env.CLAUDE_CODE_USE_POWERSHELL_TOOL).toBeUndefined()
+    delete process.env.CLAUDE_CODE_USE_POWERSHELL_TOOL
+  })
+
+  it("should strip CLAUDE_CODE_USE_POWERSHELL_TOOL=0 too (full removal, not just disable)", async () => {
+    // Per the upstream behavior the reporter documented: even setting it to
+    // "0" can leak the PowerShell tool to the model. Belt-and-suspenders:
+    // we strip the var entirely regardless of value.
+    process.env.CLAUDE_CODE_USE_POWERSHELL_TOOL = "0"
+    const app = createTestApp()
+    await post(app, BASIC_REQUEST)
+    expect(capturedQueryOptions.env.CLAUDE_CODE_USE_POWERSHELL_TOOL).toBeUndefined()
+    delete process.env.CLAUDE_CODE_USE_POWERSHELL_TOOL
+  })
+
   it("should work in streaming mode too", async () => {
     process.env.ANTHROPIC_API_KEY = "dummy"
     process.env.ANTHROPIC_BASE_URL = "http://127.0.0.1:3456"

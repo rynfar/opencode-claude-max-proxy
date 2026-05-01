@@ -4,6 +4,7 @@
  */
 
 import { profileBarCss, profileBarHtml, profileBarJs, themeCss } from "./profileBar"
+import { WINDOW_LABELS } from "./profileUsage"
 
 export const profilePageHtml = `<!DOCTYPE html>
 <html lang="en">
@@ -88,6 +89,48 @@ export const profilePageHtml = `<!DOCTYPE html>
   }
   .copy-btn:hover { border-color: var(--accent); color: var(--accent); }
   .copy-btn.copied { color: var(--green); border-color: var(--green); }
+
+  /* OAuth usage panel — one block per profile, mirrors pylon's quota strip. */
+  .usage-section { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); }
+  .usage-section-title {
+    font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px;
+    margin-bottom: 10px; display: flex; align-items: center; gap: 8px;
+  }
+  .usage-as-of { font-size: 10px; color: var(--muted); text-transform: none; letter-spacing: 0; opacity: 0.7; }
+  .usage-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 8px;
+  }
+  .usage-card {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+    padding: 8px 10px; min-width: 0;
+  }
+  .usage-row {
+    display: flex; justify-content: space-between; align-items: baseline;
+    font-size: 11px; gap: 8px; margin-bottom: 6px;
+  }
+  .usage-label { color: var(--muted); font-weight: 500; white-space: nowrap; }
+  .usage-pct { font-family: 'SF Mono', SFMono-Regular, Consolas, monospace; font-weight: 600; font-size: 12px; }
+  .usage-bar {
+    height: 4px; background: rgba(127,127,127,0.18); border-radius: 2px; overflow: hidden;
+    margin-bottom: 4px;
+  }
+  .usage-fill { height: 100%; transition: width 0.4s ease; background: var(--green); }
+  .usage-card.status-warn .usage-fill,
+  .usage-card.status-warn .usage-pct { color: var(--yellow); }
+  .usage-card.status-warn .usage-fill { background: var(--yellow); }
+  .usage-card.status-high .usage-fill,
+  .usage-card.status-high .usage-pct { color: var(--red); }
+  .usage-card.status-high .usage-fill { background: var(--red); }
+  .usage-reset { font-size: 10px; color: var(--muted); white-space: nowrap; }
+  .usage-extra {
+    margin-top: 8px; padding: 8px 10px; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 6px; font-size: 11px;
+  }
+  .usage-extra-row { display: flex; justify-content: space-between; gap: 8px; }
+  .usage-empty {
+    font-size: 11px; color: var(--muted); padding: 6px 0; font-style: italic;
+  }
 ` + profileBarCss + `
 </style>
 </head>
@@ -141,11 +184,73 @@ export const profilePageHtml = `<!DOCTYPE html>
 </div>
 
 <script>
+// Inlined from src/telemetry/profileUsage.ts. The TS source is unit-tested
+// (see profile-usage.test.ts) and the labels object is interpolated here so
+// the browser script and TS module share their data.
+var WINDOW_LABELS = ${JSON.stringify(WINDOW_LABELS)};
+
+function labelForWindow(type) {
+  if (WINDOW_LABELS[type]) return WINDOW_LABELS[type];
+  return String(type || '').split('_').map(function (p) {
+    return p.length > 0 ? p[0].toUpperCase() + p.slice(1) : p;
+  }).join(' ');
+}
+
+function classifyUtilization(u) {
+  if (u == null || !isFinite(u)) return 'ok';
+  if (u >= 0.85) return 'high';
+  if (u >= 0.6) return 'warn';
+  return 'ok';
+}
+
+function formatResetCountdown(resetsAt) {
+  if (resetsAt == null || !isFinite(resetsAt)) return '';
+  var ms = resetsAt - Date.now();
+  if (ms <= 0) return 'resetting…';
+  var minutes = Math.floor(ms / 60000);
+  if (minutes < 60) return 'in ' + Math.max(1, minutes) + 'm';
+  var hours = Math.floor(minutes / 60);
+  var remMin = minutes % 60;
+  if (hours < 24) return remMin > 0 ? 'in ' + hours + 'h ' + remMin + 'm' : 'in ' + hours + 'h';
+  var days = Math.floor(hours / 24);
+  var remHr = hours % 24;
+  return remHr > 0 ? 'in ' + days + 'd ' + remHr + 'h' : 'in ' + days + 'd';
+}
+
+function formatExtraUsage(eu) {
+  if (!eu || !eu.isEnabled) return null;
+  var monthlyLimit = isFinite(eu.monthlyLimit) ? eu.monthlyLimit : 0;
+  if (monthlyLimit <= 0) return null;
+  var used = isFinite(eu.usedCredits) ? eu.usedCredits : 0;
+  var utilization = (eu.utilization != null && isFinite(eu.utilization))
+    ? Math.max(0, Math.min(1, eu.utilization))
+    : (monthlyLimit > 0 ? Math.max(0, Math.min(1, used / monthlyLimit)) : 0);
+  var currency = eu.currency || '';
+  return {
+    used: (currency + used.toFixed(2)).trim(),
+    limit: (currency + monthlyLimit.toFixed(2)).trim(),
+    utilizationPct: Math.round(utilization * 100),
+    status: classifyUtilization(utilization),
+  };
+}
+
+// Cache the last seen quota response so the /profiles/list refresh can
+// keep showing usage even if a single /v1/usage/quota/all call fails.
+var lastQuota = null;
+
 async function refresh() {
   try {
-    const res = await fetch('/profiles/list');
-    const data = await res.json();
-    render(data);
+    var [profilesRes, quotaRes] = await Promise.all([
+      fetch('/profiles/list'),
+      fetch('/v1/usage/quota/all').catch(function () { return null; }),
+    ]);
+    var profiles = await profilesRes.json();
+    var quota = null;
+    if (quotaRes && quotaRes.ok) {
+      try { quota = await quotaRes.json(); } catch (_) { quota = null; }
+    }
+    if (quota) lastQuota = quota;
+    render(profiles, lastQuota);
   } catch {
     document.getElementById('content').innerHTML = '<div class="empty-state"><h2>Could not load profiles</h2><p>Is Meridian running?</p></div>';
   }
@@ -153,9 +258,82 @@ async function refresh() {
 
 function esc(s) { var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
-function render(data) {
+function renderUsageSection(profileQuota) {
+  // No quota data for this profile yet (cold start or fetch failed) — hide
+  // entirely so we don't render an empty box.
+  if (!profileQuota) return '';
+  // API-key profiles cannot use OAuth usage — silently omit.
+  if (profileQuota.error === 'not_oauth') return '';
+
+  var windows = (profileQuota.windows || []).filter(function (w) {
+    return typeof w.utilization === 'number';
+  });
+  var extra = formatExtraUsage(profileQuota.extraUsage);
+
+  if (windows.length === 0 && !extra) {
+    if (profileQuota.error === 'no_token') {
+      return '<div class="usage-section">'
+        + '<div class="usage-section-title">Usage</div>'
+        + '<div class="usage-empty">Run <code style="background:var(--bg);padding:1px 5px;border-radius:3px">claude login</code> to see usage.</div>'
+        + '</div>';
+    }
+    return ''; // nothing fetched yet
+  }
+
+  var asOf = profileQuota.fetchedAt
+    ? '<span class="usage-as-of">updated ' + timeAgo(profileQuota.fetchedAt) + '</span>'
+    : '';
+
+  var cards = windows.map(function (w) {
+    var pct = Math.max(0, Math.min(1, w.utilization));
+    var pctRound = Math.round(pct * 100);
+    var status = classifyUtilization(pct);
+    var label = labelForWindow(w.type);
+    var reset = formatResetCountdown(w.resetsAt);
+    var tip = label + ' — ' + pctRound + '%' + (reset ? ' (resets ' + reset + ')' : '');
+    return '<div class="usage-card status-' + esc(status) + '" title="' + esc(tip) + '">'
+      + '<div class="usage-row">'
+      +   '<span class="usage-label">' + esc(label) + '</span>'
+      +   '<span class="usage-pct">' + pctRound + '%</span>'
+      + '</div>'
+      + '<div class="usage-bar"><div class="usage-fill" style="width:' + (pct * 100).toFixed(1) + '%"></div></div>'
+      + (reset ? '<div class="usage-reset">' + esc(reset) + '</div>' : '')
+    + '</div>';
+  }).join('');
+
+  var extraBlock = '';
+  if (extra) {
+    extraBlock = '<div class="usage-extra status-' + esc(extra.status) + '">'
+      +   '<div class="usage-extra-row">'
+      +     '<span class="usage-label">Extra usage</span>'
+      +     '<span class="usage-pct">' + extra.utilizationPct + '%</span>'
+      +   '</div>'
+      +   '<div class="usage-bar"><div class="usage-fill" style="width:' + extra.utilizationPct + '%"></div></div>'
+      +   '<div class="usage-extra-row" style="margin-top:4px">'
+      +     '<span class="usage-reset">' + esc(extra.used) + ' / ' + esc(extra.limit) + '</span>'
+      +   '</div>'
+      + '</div>';
+  }
+
+  return '<div class="usage-section">'
+    + '<div class="usage-section-title">Usage' + asOf + '</div>'
+    + (cards ? '<div class="usage-grid">' + cards + '</div>' : '')
+    + extraBlock
+    + '</div>';
+}
+
+function render(data, quotaData) {
   const profiles = data.profiles || [];
   const active = data.activeProfile;
+  // Build quick lookup: profileId -> per-profile quota entry from
+  // /v1/usage/quota/all. Endpoint may be unavailable (older Meridian)
+  // or have errored — in that case quotaById is empty and the per-card
+  // renderer simply hides its usage section.
+  const quotaProfiles = (quotaData && Array.isArray(quotaData.profiles)) ? quotaData.profiles : [];
+  const quotaById = {};
+  for (var qi = 0; qi < quotaProfiles.length; qi++) {
+    quotaById[quotaProfiles[qi].id] = quotaProfiles[qi];
+  }
 
   if (profiles.length === 0) {
     document.getElementById('content').innerHTML = '<div class="empty-state">'
@@ -213,6 +391,8 @@ function render(data) {
     html += '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 010 1.5h-1.5a.25.25 0 00-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 00.25-.25v-1.5a.75.75 0 011.5 0v1.5A1.75 1.75 0 019.25 16h-7.5A1.75 1.75 0 010 14.25zM5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0114.25 11h-7.5A1.75 1.75 0 015 9.25zm1.75-.25a.25.25 0 00-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 00.25-.25v-7.5a.25.25 0 00-.25-.25z"/></svg>';
     html += '</button>';
     html += '</div>';
+
+    html += renderUsageSection(quotaById[p.id]);
 
     if (!isActive) {
       html += '<button class="switch-btn" onclick="switchProfile(&quot;'+esc(p.id)+'&quot;)">Switch to ' + esc(p.id) + '</button>';

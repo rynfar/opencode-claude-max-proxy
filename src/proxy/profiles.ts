@@ -2,8 +2,9 @@
  * Multi-profile support.
  *
  * Allows a single Meridian instance to route requests to different Claude
- * accounts. Each profile is a named auth context (a CLAUDE_CONFIG_DIR for
- * Max subscriptions, or an API key for direct API access).
+ * accounts. Each profile is a named auth context — a CLAUDE_CONFIG_DIR for
+ * Max subscriptions, an Anthropic API key for direct API access, or a
+ * long-lived OAuth token minted by `claude setup-token`.
  *
  * Profile selection priority:
  *   1. x-meridian-profile request header (per-request override)
@@ -50,12 +51,17 @@ export function loadProfilesFromDisk(): ProfileConfig[] {
   }
 }
 
-export type ProfileType = "claude-max" | "api"
+export type ProfileType = "claude-max" | "api" | "oauth-token"
 
 export interface ProfileConfig {
   /** Unique profile identifier (e.g. "personal", "work") */
   id: string
-  /** Auth type — "claude-max" uses CLAUDE_CONFIG_DIR, "api" uses ANTHROPIC_API_KEY */
+  /**
+   * Auth type. Inferred from the populated credential field when omitted:
+   *   - `oauthToken`        → "oauth-token" (CLAUDE_CODE_OAUTH_TOKEN)
+   *   - `apiKey`/`baseUrl`  → must be combined with explicit `type: "api"`
+   *   - `claudeConfigDir`   → "claude-max" (CLAUDE_CONFIG_DIR)
+   */
   type?: ProfileType
   /** Path to .claude config directory (claude-max profiles) */
   claudeConfigDir?: string
@@ -63,6 +69,8 @@ export interface ProfileConfig {
   apiKey?: string
   /** Anthropic base URL override (api profiles) */
   baseUrl?: string
+  /** Long-lived OAuth token from `claude setup-token` (oauth-token profiles) */
+  oauthToken?: string
 }
 
 export interface ResolvedProfile {
@@ -182,6 +190,12 @@ export function resolveProfile(
  * Build env overrides for a profile config.
  */
 function buildResolvedProfile(profile: ProfileConfig): ResolvedProfile {
+  if (profile.oauthToken || profile.type === "oauth-token") {
+    const env: Record<string, string> = {}
+    if (profile.oauthToken) env.CLAUDE_CODE_OAUTH_TOKEN = profile.oauthToken
+    return { id: profile.id, type: "oauth-token", env }
+  }
+
   const type = profile.type ?? "claude-max"
 
   if (type === "api") {

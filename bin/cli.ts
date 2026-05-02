@@ -43,11 +43,19 @@ See https://github.com/rynfar/meridian for full documentation.`)
 }
 
 if (args[0] === "profile") {
-  const { profileAdd, profileList, profileRemove, profileSwitch, profileLogin, profileHelp } = await import("../src/proxy/profileCli")
+  const { profileAdd, profileAddOauthToken, profileList, profileRemove, profileSwitch, profileLogin, profileHelp } = await import("../src/proxy/profileCli")
   const subcommand = args[1]
   const profileId = args[2]
 
-  if (subcommand === "add" && profileId) profileAdd(profileId)
+  if (subcommand === "add" && profileId) {
+    const oauthFlagIdx = args.indexOf("--oauth-token", 3)
+    if (oauthFlagIdx >= 0) {
+      const tokenArg = args[oauthFlagIdx + 1]
+      await profileAddOauthToken(profileId, tokenArg)
+    } else {
+      profileAdd(profileId)
+    }
+  }
   else if (subcommand === "list" || subcommand === "ls") profileList()
   else if (subcommand === "remove" && profileId) profileRemove(profileId)
   else if (subcommand === "switch" && profileId) await profileSwitch(profileId)

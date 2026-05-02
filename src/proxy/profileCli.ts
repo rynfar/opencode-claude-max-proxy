@@ -1,8 +1,10 @@
 /**
  * CLI commands for profile management.
  *
- * Profiles are stored under ~/.config/meridian/profiles/{id}/ — each
- * directory is a standalone CLAUDE_CONFIG_DIR with its own OAuth tokens.
+ * Browser-login profiles are stored under ~/.config/meridian/profiles/{id}/
+ * — each directory is a standalone CLAUDE_CONFIG_DIR with its own OAuth
+ * tokens. OAuth-token profiles (added via `--oauth-token`) live entirely in
+ * profiles.json — no per-profile config dir.
  *
  * This is a leaf module — no imports from server.ts or session/.
  */
@@ -143,6 +145,38 @@ export function profileAdd(id: string): void {
   printEnvHint(profiles)
 }
 
+export async function profileAddOauthToken(id: string, tokenArg: string | undefined): Promise<void> {
+  if (!id || /[^a-zA-Z0-9_-]/.test(id)) {
+    console.error("\x1b[31m✗ Invalid profile ID.\x1b[0m Use only letters, numbers, hyphens, underscores.")
+    process.exit(1)
+  }
+
+  const profiles = loadProfileConfig()
+  if (profiles.find(p => p.id === id)) {
+    console.error(`\x1b[31m✗ Profile "${id}" already exists.\x1b[0m`)
+    console.error(`  Run: meridian profile list`)
+    process.exit(1)
+  }
+
+  let token = tokenArg?.trim() ?? ""
+  if (!token) {
+    console.log(`\x1b[36mAdding profile: ${id} (OAuth token)\x1b[0m`)
+    console.log(`  Generate a token with: \x1b[1mclaude setup-token\x1b[0m`)
+    console.log()
+    token = promptToken(`Paste OAuth token for "${id}" (input hidden):`)
+  }
+
+  if (!token) {
+    console.error("\x1b[31m✗ Empty token. Aborted.\x1b[0m")
+    process.exit(1)
+  }
+
+  profiles.push({ id, type: "oauth-token", oauthToken: token })
+  saveProfileConfig(profiles)
+  console.log(`\x1b[32m✓ Profile "${id}" added (OAuth token).\x1b[0m`)
+  printEnvHint(profiles)
+}
+
 export function profileList(): void {
   const profiles = loadProfileConfig()
   if (profiles.length === 0) {
@@ -153,6 +187,10 @@ export function profileList(): void {
 
   console.log("Profiles:\n")
   for (const p of profiles) {
+    if (p.oauthToken || p.type === "oauth-token") {
+      console.log(`  ${p.id.padEnd(20)} \x1b[32m✓ OAuth token\x1b[0m`)
+      continue
+    }
     const auth = getAuthStatus(p.claudeConfigDir ?? "")
     const status = auth.loggedIn
       ? `\x1b[32m✓ ${auth.email} (${auth.subscriptionType || "unknown"})\x1b[0m`
@@ -220,6 +258,12 @@ export function profileLogin(id: string): void {
     process.exit(1)
   }
 
+  if (profile.oauthToken || profile.type === "oauth-token") {
+    console.error(`\x1b[31m✗ Profile "${id}" uses an OAuth token; \`claude auth login\` does not apply.\x1b[0m`)
+    console.error(`  To replace the token: meridian profile remove ${id} && meridian profile add ${id} --oauth-token`)
+    process.exit(1)
+  }
+
   console.log(`\x1b[36mRe-authenticating profile: ${id}\x1b[0m`)
   console.log()
   console.log("\x1b[33m⚠ Make sure you're signed into the correct Claude account in your browser.\x1b[0m")
@@ -256,6 +300,42 @@ function promptYesNo(question: string): boolean {
   return answer !== "n" && answer !== "no"
 }
 
+/** Synchronous secret prompt. Reads one line from stdin without echoing typed
+ *  characters (TTY). Falls back to a piped read when stdin is not a TTY so
+ *  `echo $TOKEN | meridian profile add ci --oauth-token` keeps working. */
+function promptToken(question: string): string {
+  process.stderr.write(`${question}\n> `)
+  const script = [
+    `const stdin = process.stdin;`,
+    `if (!stdin.isTTY) {`,
+    `  let buf = "";`,
+    `  stdin.setEncoding("utf8");`,
+    `  stdin.on("data", (c) => { buf += c; });`,
+    `  stdin.on("end", () => { process.stdout.write(buf.split(/\\r?\\n/)[0] || ""); process.exit(0); });`,
+    `} else {`,
+    `  stdin.setRawMode(true); stdin.resume(); stdin.setEncoding("utf8");`,
+    `  let input = "";`,
+    `  stdin.on("data", (key) => {`,
+    `    if (key === "\\u0003") { process.stderr.write("\\n"); process.exit(1); }`,
+    `    else if (key === "\\r" || key === "\\n") {`,
+    `      stdin.setRawMode(false); process.stderr.write("\\n");`,
+    `      process.stdout.write(input); process.exit(0);`,
+    `    }`,
+    `    else if (key === "\\u007f" || key === "\\b") {`,
+    `      if (input.length > 0) input = input.slice(0, -1);`,
+    `    }`,
+    `    else { input += key; }`,
+    `  });`,
+    `}`,
+  ].join("\n")
+  const result = spawnSync("node", ["-e", script], { stdio: ["inherit", "pipe", "inherit"] })
+  if (result.status !== 0) {
+    process.stderr.write("\n")
+    process.exit(1)
+  }
+  return (result.stdout?.toString() ?? "").trim()
+}
+
 function printEnvHint(_profiles: ProfileConfig[]): void {
   console.log(`\x1b[90mConfig: ${CONFIG_FILE}\x1b[0m`)
   console.log("\x1b[90mProfiles are picked up automatically — no restart needed.\x1b[0m")
@@ -265,15 +345,20 @@ export function profileHelp(): void {
   console.log(`meridian profile — manage Claude account profiles
 
 Commands:
-  meridian profile add <name>       Add a profile and authenticate
-  meridian profile list             List profiles and auth status
-  meridian profile remove <name>    Remove a profile
-  meridian profile switch <name>    Switch the active profile (requires running proxy)
-  meridian profile login <name>     Re-authenticate an existing profile
+  meridian profile add <name>                       Add a profile via browser login
+  meridian profile add <name> --oauth-token [TOKEN] Add a profile from a \`claude setup-token\` value
+                                                    (if TOKEN is omitted, you will be prompted; input is hidden)
+  meridian profile list                             List profiles and auth status
+  meridian profile remove <name>                    Remove a profile
+  meridian profile switch <name>                    Switch the active profile (requires running proxy)
+  meridian profile login <name>                     Re-authenticate an existing profile (claude-max only)
 
 Examples:
-  meridian profile add personal     # Add personal account
-  meridian profile add work         # Add work account
-  meridian profile switch work      # Switch to work account
-  meridian profile list             # Show all profiles`)
+  meridian profile add personal                     # Add personal account (browser login)
+  meridian profile add work                         # Add work account
+  meridian profile add ci --oauth-token             # Add headless CI profile (prompted, no echo)
+  meridian profile add ci --oauth-token sk-ant-oat01-...
+                                                    # Add headless CI profile (token from CLI argument)
+  meridian profile switch work                      # Switch to work account
+  meridian profile list                             # Show all profiles`)
 }

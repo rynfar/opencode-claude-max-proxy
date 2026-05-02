@@ -239,6 +239,20 @@ meridian profile add work
 
 > **⚠ Important:** Claude's OAuth reuses your browser session. Before adding a second account, sign out of claude.ai and sign into the other account first.
 
+#### Headless / CI: register an OAuth token
+
+When a browser isn't available (containers, CI runners, remote shells), generate a long-lived OAuth token with `claude setup-token` and register it as a profile:
+
+```bash
+# Prompt for the token (input is hidden — paste the value from `claude setup-token`)
+meridian profile add ci --oauth-token
+
+# Or pass it inline
+meridian profile add ci --oauth-token sk-ant-oat01-...
+```
+
+OAuth-token profiles store nothing on disk besides the token in `profiles.json` — there's no per-profile config dir, no Keychain entry, no browser handshake. The Claude Code SDK reads the token from `CLAUDE_CODE_OAUTH_TOKEN` for any request routed to that profile.
+
 ### Switching profiles
 
 ```bash
@@ -256,14 +270,15 @@ You can also switch profiles from the web UI at `http://127.0.0.1:3456/profiles`
 | Command | Description |
 |---------|-------------|
 | `meridian profile add <name>` | Add a profile and authenticate via browser |
+| `meridian profile add <name> --oauth-token [TOKEN]` | Add a headless profile from a `claude setup-token` value (prompts when `TOKEN` is omitted) |
 | `meridian profile list` | List profiles and auth status |
 | `meridian profile switch <name>` | Switch the active profile (requires running proxy) |
-| `meridian profile login <name>` | Re-authenticate an expired profile |
+| `meridian profile login <name>` | Re-authenticate an expired profile (browser-login profiles only) |
 | `meridian profile remove <name>` | Remove a profile and its credentials |
 
 ### How it works
 
-Each profile stores its credentials in an isolated `CLAUDE_CONFIG_DIR` under `~/.config/meridian/profiles/<name>/`. When a request arrives, Meridian resolves the profile in priority order:
+Each profile stores its credentials in an isolated `CLAUDE_CONFIG_DIR` under `~/.config/meridian/profiles/<name>/`. OAuth-token profiles are the exception — they live entirely in `~/.config/meridian/profiles.json` and feed the SDK via `CLAUDE_CODE_OAUTH_TOKEN` directly. When a request arrives, Meridian resolves the profile in priority order:
 
 1. `x-meridian-profile` request header (per-request override)
 2. Active profile (set via `meridian profile switch` or the web UI)
@@ -276,10 +291,20 @@ Session state is scoped per profile — switching accounts won't cross-contamina
 For advanced setups (CI, Docker), profiles can also be provided via environment variable:
 
 ```bash
-export MERIDIAN_PROFILES='[{"id":"personal","claudeConfigDir":"/path/to/config1"},{"id":"work","claudeConfigDir":"/path/to/config2"}]'
+export MERIDIAN_PROFILES='[
+  {"id":"personal","claudeConfigDir":"/path/to/config1"},
+  {"id":"work","claudeConfigDir":"/path/to/config2"},
+  {"id":"ci","oauthToken":"sk-ant-oat01-..."}
+]'
 export MERIDIAN_DEFAULT_PROFILE=personal
 meridian
 ```
+
+Profile shapes:
+
+- `claudeConfigDir` — points at a `~/.claude`-style directory; uses Claude Max OAuth from that dir
+- `apiKey` (with optional `baseUrl`) — direct Anthropic API access; sets `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL`
+- `oauthToken` — long-lived token from `claude setup-token`; sets `CLAUDE_CODE_OAUTH_TOKEN`, no config dir needed
 
 When `MERIDIAN_PROFILES` is set, it takes precedence over disk-configured profiles. When unset, Meridian auto-discovers profiles from `~/.config/meridian/profiles.json` on each request.
 
@@ -710,9 +735,10 @@ export default {
 | `meridian` | Start the proxy server |
 | `meridian setup` | Configure the OpenCode plugin in `~/.config/opencode/opencode.json` |
 | `meridian profile add <name>` | Add a profile and authenticate via browser |
+| `meridian profile add <name> --oauth-token [TOKEN]` | Add a headless profile from a `claude setup-token` value (prompts when `TOKEN` is omitted) |
 | `meridian profile list` | List all profiles and their auth status |
 | `meridian profile switch <name>` | Switch the active profile (requires running proxy) |
-| `meridian profile login <name>` | Re-authenticate an expired profile |
+| `meridian profile login <name>` | Re-authenticate an expired profile (browser-login profiles only) |
 | `meridian profile remove <name>` | Remove a profile and its credentials |
 | `meridian refresh-token` | Manually refresh the Claude OAuth token (exits 0/1) |
 
@@ -766,6 +792,19 @@ docker run \
 ```
 
 Switch profiles at runtime via the `x-meridian-profile` header or `meridian profile switch` (see [Multi-Profile Support](#multi-profile-support)).
+
+### OAuth-token profiles in Docker (no volume mount)
+
+If you'd rather not mount a credential directory, generate a long-lived OAuth token on the host with `claude setup-token` and pass it as a profile. There's nothing to mount — the token alone is the credential:
+
+```bash
+docker run \
+  -e 'MERIDIAN_PROFILES=[{"id":"ci","oauthToken":"sk-ant-oat01-..."}]' \
+  -e MERIDIAN_DEFAULT_PROFILE=ci \
+  -p 3456:3456 meridian
+```
+
+This is the recommended path for CI runners, ephemeral containers, and cross-host deployments where browser-based login isn't reachable. Treat the token like any other secret — inject it via your platform's secret store rather than committing it to your image or compose file.
 
 ## Testing
 

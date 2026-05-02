@@ -95,6 +95,52 @@ describe("resolveProfile", () => {
     expect(result.type).toBe("api")
     expect(result.env).toEqual({})
   })
+
+  test("resolves oauth-token profile via explicit type", () => {
+    const result = resolveProfile(
+      [{ id: "ci", type: "oauth-token", oauthToken: "sk-ant-oat01-foo" }],
+      undefined,
+    )
+    expect(result.id).toBe("ci")
+    expect(result.type).toBe("oauth-token")
+    expect(result.env).toEqual({ CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-foo" })
+  })
+
+  test("infers oauth-token type from oauthToken field alone", () => {
+    const result = resolveProfile([{ id: "ci", oauthToken: "sk-ant-oat01-bar" }], undefined)
+    expect(result.id).toBe("ci")
+    expect(result.type).toBe("oauth-token")
+    expect(result.env).toEqual({ CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-bar" })
+  })
+
+  test("oauthToken takes precedence over claudeConfigDir on the same profile", () => {
+    const result = resolveProfile(
+      [{ id: "ci", oauthToken: "sk-ant-oat01-baz", claudeConfigDir: "/ignored" }],
+      undefined,
+    )
+    expect(result.type).toBe("oauth-token")
+    expect(result.env).toEqual({ CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-baz" })
+    expect(result.env.CLAUDE_CONFIG_DIR).toBeUndefined()
+  })
+
+  test("oauth-token type without oauthToken returns empty env", () => {
+    const result = resolveProfile([{ id: "bare-oauth", type: "oauth-token" }], undefined)
+    expect(result.id).toBe("bare-oauth")
+    expect(result.type).toBe("oauth-token")
+    expect(result.env).toEqual({})
+  })
+
+  test("header selects oauth-token profile when active points elsewhere", () => {
+    const mixed: ProfileConfig[] = [
+      { id: "personal", claudeConfigDir: "/c1" },
+      { id: "ci", oauthToken: "sk-ant-oat01-qux" },
+    ]
+    setActiveProfile("personal")
+    const result = resolveProfile(mixed, undefined, "ci")
+    expect(result.id).toBe("ci")
+    expect(result.type).toBe("oauth-token")
+    expect(result.env).toEqual({ CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-qux" })
+  })
 })
 
 describe("listProfiles", () => {
@@ -131,6 +177,14 @@ describe("listProfiles", () => {
   test("defaults type to claude-max when unset", () => {
     const result = listProfiles([{ id: "bare" }], undefined)
     expect(result[0]!.type).toBe("claude-max")
+  })
+
+  test("preserves oauth-token type when explicitly set", () => {
+    const result = listProfiles(
+      [{ id: "ci", type: "oauth-token", oauthToken: "sk-ant-oat01-foo" }],
+      undefined,
+    )
+    expect(result[0]).toEqual({ id: "ci", type: "oauth-token", isActive: true })
   })
 })
 

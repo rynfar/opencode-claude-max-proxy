@@ -2,6 +2,8 @@
  * Unit tests for profiles.ts — pure function tests (no mocks needed).
  */
 import { describe, test, expect, beforeEach } from "bun:test"
+import { join } from "node:path"
+import { homedir } from "node:os"
 import {
   resolveProfile,
   listProfiles,
@@ -103,24 +105,33 @@ describe("resolveProfile", () => {
     )
     expect(result.id).toBe("ci")
     expect(result.type).toBe("oauth-token")
-    expect(result.env).toEqual({ CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-foo" })
+    expect(result.env.CLAUDE_CODE_OAUTH_TOKEN).toBe("sk-ant-oat01-foo")
+    expect(result.env.CLAUDE_CONFIG_DIR).toBe(
+      join(homedir(), ".config", "meridian", "profiles", "ci"),
+    )
   })
 
   test("infers oauth-token type from oauthToken field alone", () => {
     const result = resolveProfile([{ id: "ci", oauthToken: "sk-ant-oat01-bar" }], undefined)
     expect(result.id).toBe("ci")
     expect(result.type).toBe("oauth-token")
-    expect(result.env).toEqual({ CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-bar" })
+    expect(result.env.CLAUDE_CODE_OAUTH_TOKEN).toBe("sk-ant-oat01-bar")
+    expect(result.env.CLAUDE_CONFIG_DIR).toBe(
+      join(homedir(), ".config", "meridian", "profiles", "ci"),
+    )
   })
 
-  test("oauthToken takes precedence over claudeConfigDir on the same profile", () => {
+  test("oauthToken overrides claudeConfigDir with isolated profile dir", () => {
     const result = resolveProfile(
       [{ id: "ci", oauthToken: "sk-ant-oat01-baz", claudeConfigDir: "/ignored" }],
       undefined,
     )
     expect(result.type).toBe("oauth-token")
-    expect(result.env).toEqual({ CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-baz" })
-    expect(result.env.CLAUDE_CONFIG_DIR).toBeUndefined()
+    expect(result.env.CLAUDE_CODE_OAUTH_TOKEN).toBe("sk-ant-oat01-baz")
+    expect(result.env.CLAUDE_CONFIG_DIR).toBe(
+      join(homedir(), ".config", "meridian", "profiles", "ci"),
+    )
+    expect(result.env.CLAUDE_CONFIG_DIR).not.toBe("/ignored")
   })
 
   test("oauth-token type without oauthToken returns empty env", () => {
@@ -128,6 +139,14 @@ describe("resolveProfile", () => {
     expect(result.id).toBe("bare-oauth")
     expect(result.type).toBe("oauth-token")
     expect(result.env).toEqual({})
+  })
+
+  test("oauth-token isolation dir uses profile id, not 'default'", () => {
+    const result = resolveProfile(
+      [{ id: "my-special-ci", oauthToken: "sk-ant-oat01-aaa" }],
+      undefined,
+    )
+    expect(result.env.CLAUDE_CONFIG_DIR).toContain("/my-special-ci")
   })
 
   test("header selects oauth-token profile when active points elsewhere", () => {
@@ -139,7 +158,10 @@ describe("resolveProfile", () => {
     const result = resolveProfile(mixed, undefined, "ci")
     expect(result.id).toBe("ci")
     expect(result.type).toBe("oauth-token")
-    expect(result.env).toEqual({ CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-qux" })
+    expect(result.env.CLAUDE_CODE_OAUTH_TOKEN).toBe("sk-ant-oat01-qux")
+    expect(result.env.CLAUDE_CONFIG_DIR).toBe(
+      join(homedir(), ".config", "meridian", "profiles", "ci"),
+    )
   })
 })
 

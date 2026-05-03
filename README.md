@@ -251,7 +251,7 @@ meridian profile add ci --oauth-token
 meridian profile add ci --oauth-token sk-ant-oat01-...
 ```
 
-OAuth-token profiles store nothing on disk besides the token in `profiles.json` — there's no per-profile config dir, no Keychain entry, no browser handshake. The Claude Code SDK reads the token from `CLAUDE_CODE_OAUTH_TOKEN` for any request routed to that profile.
+OAuth-token profiles store the token in `profiles.json` and feed it to the SDK via `CLAUDE_CODE_OAUTH_TOKEN` — no Keychain entry, no browser handshake. To prevent the SDK's 401-recovery from silently falling back to the host's `~/.claude` credentials, OAuth-token profiles also pin `CLAUDE_CONFIG_DIR` to an isolated per-profile directory under `~/.config/meridian/profiles/<name>/`. That directory holds only SDK state (sessions, settings) — never `.credentials.json`, since the token is delivered through the env.
 
 ### Switching profiles
 
@@ -278,7 +278,7 @@ You can also switch profiles from the web UI at `http://127.0.0.1:3456/profiles`
 
 ### How it works
 
-Each profile stores its credentials in an isolated `CLAUDE_CONFIG_DIR` under `~/.config/meridian/profiles/<name>/`. OAuth-token profiles are the exception — they live entirely in `~/.config/meridian/profiles.json` and feed the SDK via `CLAUDE_CODE_OAUTH_TOKEN` directly. When a request arrives, Meridian resolves the profile in priority order:
+Each profile stores its credentials in an isolated `CLAUDE_CONFIG_DIR` under `~/.config/meridian/profiles/<name>/`. OAuth-token profiles use the same isolated directory layout — but the token itself lives in `~/.config/meridian/profiles.json` and is fed to the SDK via `CLAUDE_CODE_OAUTH_TOKEN`, so the per-profile dir holds only SDK state (sessions, settings) and never the credential. When a request arrives, Meridian resolves the profile in priority order:
 
 1. `x-meridian-profile` request header (per-request override)
 2. Active profile (set via `meridian profile switch` or the web UI)

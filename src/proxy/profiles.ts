@@ -192,7 +192,14 @@ export function resolveProfile(
 function buildResolvedProfile(profile: ProfileConfig): ResolvedProfile {
   if (profile.oauthToken || profile.type === "oauth-token") {
     const env: Record<string, string> = {}
-    if (profile.oauthToken) env.CLAUDE_CODE_OAUTH_TOKEN = profile.oauthToken
+    if (profile.oauthToken) {
+      env.CLAUDE_CODE_OAUTH_TOKEN = profile.oauthToken
+      // Isolate from host ~/.claude. Without this, the SDK's 401-recovery
+      // silently reads host creds from disk and swaps a refreshed token in
+      // for our env value, masking token failures. Path must not collapse
+      // to ~/.claude — see query.ts re: upstream claude-code#20553.
+      env.CLAUDE_CONFIG_DIR = join(homedir(), ".config", "meridian", "profiles", profile.id)
+    }
     return { id: profile.id, type: "oauth-token", env }
   }
 

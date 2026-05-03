@@ -283,12 +283,51 @@ describe("isExpiredTokenError", () => {
     )).toBe(true)
   })
 
-  it("returns false for unrelated auth errors", async () => {
+  it("returns false for unrelated errors that lack a 401 marker", async () => {
     const { isExpiredTokenError } = await import("../proxy/errors")
     expect(isExpiredTokenError("authentication failed")).toBe(false)
     expect(isExpiredTokenError("rate limit exceeded")).toBe(false)
     expect(isExpiredTokenError("invalid credentials")).toBe(false)
     expect(isExpiredTokenError("token refresh failed")).toBe(false)
+  })
+
+  // ---------------------------------------------------------------------------
+  // Broadened triggers — generic 401s and RFC-6750 wording.
+  //
+  // Reason: Anthropic's API can return a 401 for an expired access token
+  // without echoing the CLI-specific "OAuth token has expired" string, so the
+  // narrow legacy matcher missed scheduled-expiry failures and the proxy
+  // never fired refresh-and-retry. Confirmed in production 2026-05-03 on two
+  // NAS instances that sat idle past expiry: credentials.json mtime never
+  // ticked, every request returned 401 to the client, no
+  // "token_refresh.retrying" ever logged.
+  // ---------------------------------------------------------------------------
+
+  it("detects generic 401 + authentication wording", async () => {
+    const { isExpiredTokenError } = await import("../proxy/errors")
+    expect(isExpiredTokenError("API Error: 401 authentication_error")).toBe(true)
+    expect(isExpiredTokenError("HTTP 401 Unauthorized")).toBe(true)
+    expect(isExpiredTokenError("401 invalid request")).toBe(true)
+  })
+
+  it("detects RFC-6750 token error codes", async () => {
+    const { isExpiredTokenError } = await import("../proxy/errors")
+    expect(isExpiredTokenError('error="invalid_token"')).toBe(true)
+    expect(isExpiredTokenError("token_expired")).toBe(true)
+  })
+
+  it("does not trigger on 401 without an auth keyword", async () => {
+    const { isExpiredTokenError } = await import("../proxy/errors")
+    // Hypothetical 401 without auth wording — leave as not-a-trigger to keep
+    // the false-positive surface narrow.
+    expect(isExpiredTokenError("API returned 401 over rate limit")).toBe(false)
+  })
+
+  it("does not trigger on non-401 errors that incidentally include auth words", async () => {
+    const { isExpiredTokenError } = await import("../proxy/errors")
+    expect(isExpiredTokenError("authentication failed")).toBe(false)
+    expect(isExpiredTokenError("invalid argument")).toBe(false)
+    expect(isExpiredTokenError("unauthorized scope")).toBe(false)
   })
 })
 

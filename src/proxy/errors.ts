@@ -129,14 +129,27 @@ export function classifyError(errMsg: string): ClassifiedError {
  * Detect errors caused by an expired or missing OAuth access token.
  * Triggers an inline token refresh + retry in server.ts.
  *
- * Two distinct messages from the Claude Code CLI:
- *   - "OAuth token has expired" — CLI sent the token, Anthropic API rejected it
- *   - "Not logged in"           — CLI checked expiresAt locally and refused to try
- * Both are resolved by refreshing the token.
+ * Patterns, in order of specificity:
+ *   - "OAuth token has expired" / "Not logged in" — CLI-emitted (subprocess
+ *     either got 401 with this wording from Anthropic or detected expiry
+ *     locally before sending).
+ *   - "invalid_token" / "token_expired" — RFC 6750 resource-server errors that
+ *     can appear in the API response body.
+ *   - "401" + ("authentication" | "unauthorized" | "invalid") — generic 401
+ *     wrapping. Anthropic's API does not always echo the CLI-specific wording,
+ *     so without this branch a stale access token returns a generic 401 to the
+ *     proxy and refresh-and-retry never fires (caller sees the 401).
+ *
+ * False positives only cost one OAuth round-trip — the refresh is single-shot
+ * per request (gated by `tokenRefreshed` in server.ts) and surfaces the
+ * original error if it doesn't help.
  */
 export function isExpiredTokenError(errMsg: string): boolean {
   const lower = errMsg.toLowerCase()
-  return lower.includes("oauth token has expired") || lower.includes("not logged in")
+  if (lower.includes("oauth token has expired") || lower.includes("not logged in")) return true
+  if (lower.includes("invalid_token") || lower.includes("token_expired")) return true
+  if (lower.includes("401") && (lower.includes("authentication") || lower.includes("unauthorized") || lower.includes("invalid"))) return true
+  return false
 }
 
 /**

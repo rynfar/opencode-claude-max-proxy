@@ -44,7 +44,7 @@ import { LRUMap } from "../utils/lruMap"
 import { telemetryStore, diagnosticLog, createTelemetryRoutes, landingHtml, renderPrometheusMetrics } from "../telemetry"
 import type { RequestMetric } from "../telemetry"
 import { classifyError, extractSdkTermination, formatSdkTermination, isStaleSessionError, isRateLimitError, isExtraUsageRequiredError, isExpiredTokenError } from "./errors"
-import { refreshOAuthToken, ensureFreshToken } from "./tokenRefresh"
+import { refreshOAuthToken, ensureFreshToken, startBackgroundRefresh, stopBackgroundRefresh } from "./tokenRefresh"
 import { checkPluginConfigured } from "./setup"
 import { mapModelToClaudeModel, resolveClaudeExecutableAsync, resolveSdkModelDefaults, isClosedControllerError, getClaudeAuthStatusAsync, getAuthCacheInfo, hasExtendedContext, stripExtendedContext, recordExtendedContextUnavailable } from "./models"
 import type { AnthropicSseEvent } from "./openai"
@@ -2944,6 +2944,12 @@ export async function startProxyServer(config: Partial<ProxyConfig> = {}): Promi
     }
   })
 
+  // Background OAuth token refresh: keeps the refresh chain warm even when
+  // the proxy sits idle. Without it, an unused refresh token can be
+  // invalidated server-side after sitting unused for an extended period.
+  // Idempotent — re-calling start() on a hot-reload is a no-op.
+  startBackgroundRefresh()
+
   // Background auth keepalive: periodically refresh auth status for all
   // configured profiles so switching is instant (no stale token delay).
   let authKeepaliveInterval: ReturnType<typeof setInterval> | undefined
@@ -2971,6 +2977,7 @@ export async function startProxyServer(config: Partial<ProxyConfig> = {}): Promi
     config: finalConfig,
     async close() {
       if (authKeepaliveInterval) clearInterval(authKeepaliveInterval)
+      stopBackgroundRefresh()
       await new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()))
       })

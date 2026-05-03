@@ -341,6 +341,149 @@ describe("ensureFreshToken", () => {
 })
 
 // ---------------------------------------------------------------------------
+// startBackgroundRefresh — traffic-independent scheduled refresh
+// ---------------------------------------------------------------------------
+
+describe("startBackgroundRefresh", () => {
+  let originalFetch: typeof globalThis.fetch
+  beforeEach(() => { originalFetch = globalThis.fetch })
+  afterEach(async () => {
+    const { stopBackgroundRefresh, resetInflightRefresh } = await import("../proxy/tokenRefresh")
+    stopBackgroundRefresh()
+    resetInflightRefresh()
+    globalThis.fetch = originalFetch
+  })
+
+  // Wait for any pending timers + microtasks to flush. Real timers — keeps
+  // the test runner simple at the cost of slightly longer test runs.
+  const tick = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
+
+  it("immediately refreshes when token is already expired", async () => {
+    const { startBackgroundRefresh, isBackgroundRefreshActive } = await import("../proxy/tokenRefresh")
+    let fetchCalls = 0
+    mockFetch(() => {
+      fetchCalls++
+      return Promise.resolve(makeSuccessResponse(MOCK_TOKEN_RESPONSE))
+    })
+    const { store, getStored } = makeStore({
+      ...MOCK_CREDENTIALS,
+      claudeAiOauth: { ...MOCK_CREDENTIALS.claudeAiOauth, expiresAt: Date.now() - 60_000 },
+    })
+
+    startBackgroundRefresh(store, 1000, 60_000)
+    expect(isBackgroundRefreshActive()).toBe(true)
+    await tick(50)
+
+    expect(fetchCalls).toBe(1)
+    expect(getStored()?.claudeAiOauth.accessToken).toBe("new-access-token")
+  })
+
+  it("schedules — does not refresh — when token has time", async () => {
+    const { startBackgroundRefresh } = await import("../proxy/tokenRefresh")
+    let fetchCalls = 0
+    mockFetch(() => {
+      fetchCalls++
+      return Promise.resolve(makeSuccessResponse(MOCK_TOKEN_RESPONSE))
+    })
+    const { store } = makeStore({
+      ...MOCK_CREDENTIALS,
+      claudeAiOauth: { ...MOCK_CREDENTIALS.claudeAiOauth, expiresAt: Date.now() + 60 * 60 * 1000 }, // +1h
+    })
+
+    startBackgroundRefresh(store, 1000, 60_000)
+    await tick(50)
+
+    expect(fetchCalls).toBe(0)
+  })
+
+  it("polls when no credentials are present, picks up new file on next tick", async () => {
+    const { startBackgroundRefresh, stopBackgroundRefresh } = await import("../proxy/tokenRefresh")
+    let stored: typeof MOCK_CREDENTIALS | null = null
+    const store: CredentialStore = {
+      async read() { return stored ? JSON.parse(JSON.stringify(stored)) : null },
+      async write(c) { stored = c as typeof MOCK_CREDENTIALS; return true },
+    }
+    let fetchCalls = 0
+    mockFetch(() => {
+      fetchCalls++
+      return Promise.resolve(makeSuccessResponse(MOCK_TOKEN_RESPONSE))
+    })
+
+    startBackgroundRefresh(store, 1000, 30) // 30ms poll interval
+    await tick(50)
+    expect(fetchCalls).toBe(0) // no credentials yet — refresh skipped
+
+    // Operator "logs in" — credentials appear with an expired token
+    stored = {
+      ...MOCK_CREDENTIALS,
+      claudeAiOauth: { ...MOCK_CREDENTIALS.claudeAiOauth, expiresAt: Date.now() - 1000 },
+    }
+    await tick(60) // wait for next poll tick
+
+    expect(fetchCalls).toBeGreaterThanOrEqual(1)
+    stopBackgroundRefresh()
+  })
+
+  it("retries on refresh failure", async () => {
+    const { startBackgroundRefresh } = await import("../proxy/tokenRefresh")
+    let fetchCalls = 0
+    mockFetch(() => {
+      fetchCalls++
+      return Promise.resolve(new Response("invalid_grant", { status: 400 }))
+    })
+    const { store } = makeStore({
+      ...MOCK_CREDENTIALS,
+      claudeAiOauth: { ...MOCK_CREDENTIALS.claudeAiOauth, expiresAt: Date.now() - 1000 },
+    })
+
+    startBackgroundRefresh(store, 1000, 30) // 30ms retry interval
+    await tick(120) // let it retry a few times
+
+    expect(fetchCalls).toBeGreaterThanOrEqual(2)
+  })
+
+  it("is idempotent — second start() while running is a no-op", async () => {
+    const { startBackgroundRefresh, isBackgroundRefreshActive } = await import("../proxy/tokenRefresh")
+    let fetchCalls = 0
+    mockFetch(() => {
+      fetchCalls++
+      return Promise.resolve(makeSuccessResponse(MOCK_TOKEN_RESPONSE))
+    })
+    const { store } = makeStore({
+      ...MOCK_CREDENTIALS,
+      claudeAiOauth: { ...MOCK_CREDENTIALS.claudeAiOauth, expiresAt: Date.now() - 1000 },
+    })
+
+    startBackgroundRefresh(store, 1000, 60_000)
+    startBackgroundRefresh(store, 1000, 60_000) // second call — should be no-op
+    expect(isBackgroundRefreshActive()).toBe(true)
+    await tick(50)
+
+    expect(fetchCalls).toBe(1) // only one refresh, not two
+  })
+
+  it("stop() prevents the next scheduled refresh from firing", async () => {
+    const { startBackgroundRefresh, stopBackgroundRefresh, isBackgroundRefreshActive } = await import("../proxy/tokenRefresh")
+    let fetchCalls = 0
+    mockFetch(() => {
+      fetchCalls++
+      return Promise.resolve(makeSuccessResponse(MOCK_TOKEN_RESPONSE))
+    })
+    const { store } = makeStore({
+      ...MOCK_CREDENTIALS,
+      claudeAiOauth: { ...MOCK_CREDENTIALS.claudeAiOauth, expiresAt: Date.now() + 1000 }, // 1s out, well past 100ms buffer
+    })
+
+    startBackgroundRefresh(store, 100, 60_000)
+    stopBackgroundRefresh()
+    expect(isBackgroundRefreshActive()).toBe(false)
+    await tick(1500) // would have fired by now
+
+    expect(fetchCalls).toBe(0)
+  })
+})
+
+// ---------------------------------------------------------------------------
 // createPlatformCredentialStore
 // ---------------------------------------------------------------------------
 

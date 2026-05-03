@@ -329,6 +329,107 @@ export async function ensureFreshToken(
   return refreshOAuthToken(s)
 }
 
+// ---------------------------------------------------------------------------
+// Background refresh scheduler
+// ---------------------------------------------------------------------------
+
+let scheduledRefreshTimer: ReturnType<typeof setTimeout> | null = null
+let scheduledRefreshActive = false
+
+/**
+ * Start a self-rescheduling timer that refreshes the access token shortly
+ * before each expiry — regardless of incoming traffic.
+ *
+ * Idempotent: a second call while one is already running is a no-op. Safe to
+ * call from any code path; returns synchronously and schedules in the
+ * background.
+ *
+ * Why traffic-independent matters: without this, an idle proxy never fires
+ * either the proactive (`ensureFreshToken`) or reactive (401-retry) refresh
+ * path. Anthropic's OAuth refresh tokens appear to be invalidated server-side
+ * after sitting unused for an extended period (observed 2026-05-03: two NAS
+ * instances idle past expiry both got `400 invalid_grant` on a manual refresh
+ * attempt; only fix was OAuth-flow re-login). Running a refresh every ~8h
+ * keeps the refresh chain warm.
+ *
+ * On `refreshOAuthToken()` failure (network, transient API error, refresh
+ * token rejected) we retry every `failureRetryMs` — gives operators a window
+ * to `claude login` and have the new tokens picked up automatically on the
+ * next tick.
+ */
+export function startBackgroundRefresh(
+  store?: CredentialStore,
+  bufferMs = 5 * 60 * 1000,
+  failureRetryMs = 5 * 60 * 1000,
+): void {
+  if (scheduledRefreshActive) return
+  scheduledRefreshActive = true
+  void scheduleNext(store ?? createPlatformCredentialStore(), bufferMs, failureRetryMs)
+}
+
+/** Stop the background scheduler. Idempotent. */
+export function stopBackgroundRefresh(): void {
+  scheduledRefreshActive = false
+  if (scheduledRefreshTimer) clearTimeout(scheduledRefreshTimer)
+  scheduledRefreshTimer = null
+}
+
+async function scheduleNext(
+  store: CredentialStore,
+  bufferMs: number,
+  failureRetryMs: number,
+): Promise<void> {
+  if (!scheduledRefreshActive) return
+
+  const credentials = await store.read().catch(() => null)
+  const expiresAt = credentials?.claudeAiOauth?.expiresAt
+
+  if (!expiresAt) {
+    // Operator hasn't logged in yet (no credentials) or credentials are
+    // missing the field. Re-poll periodically — once `claude login` writes
+    // the file, the next tick picks it up.
+    armTimer(failureRetryMs, store, bufferMs, failureRetryMs)
+    return
+  }
+
+  const dueIn = expiresAt - Date.now() - bufferMs
+  if (dueIn <= 0) {
+    // Already due (or past) — fire now, schedule the follow-up based on the
+    // new expiresAt (or retry in failureRetryMs if refresh failed).
+    const ok = await refreshOAuthToken(store)
+    claudeLog("token_refresh.scheduled", { ok, immediate: true })
+    if (!scheduledRefreshActive) return
+    armTimer(ok ? 0 : failureRetryMs, store, bufferMs, failureRetryMs)
+    return
+  }
+
+  armTimer(dueIn, store, bufferMs, failureRetryMs)
+}
+
+function armTimer(
+  delayMs: number,
+  store: CredentialStore,
+  bufferMs: number,
+  failureRetryMs: number,
+): void {
+  scheduledRefreshTimer = setTimeout(async () => {
+    if (!scheduledRefreshActive) return
+    // If the timer woke up exactly at the deadline (delayMs > 0 path), fire
+    // refresh first; if the timer was a "reschedule based on disk" tick
+    // (delayMs === 0 after a successful refresh), skip the refresh and just
+    // recompute. The dueIn re-check inside scheduleNext distinguishes them.
+    void scheduleNext(store, bufferMs, failureRetryMs)
+  }, delayMs)
+  if (scheduledRefreshTimer && (scheduledRefreshTimer as { unref?: () => void }).unref) {
+    (scheduledRefreshTimer as { unref: () => void }).unref()
+  }
+}
+
+/** For testing only. */
+export function isBackgroundRefreshActive(): boolean {
+  return scheduledRefreshActive
+}
+
 /** Reset in-flight state — for testing only. */
 export function resetInflightRefresh(): void {
   inflightRefresh = null

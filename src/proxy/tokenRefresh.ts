@@ -398,6 +398,7 @@ async function scheduleNext(
     // new expiresAt (or retry in failureRetryMs if refresh failed).
     const ok = await refreshOAuthToken(store)
     claudeLog("token_refresh.scheduled", { ok, immediate: true })
+    console.error(`[token_refresh] scheduled refresh (immediate) ok=${ok}`)
     if (!scheduledRefreshActive) return
     armTimer(ok ? 0 : failureRetryMs, store, bufferMs, failureRetryMs)
     return
@@ -414,10 +415,10 @@ function armTimer(
 ): void {
   scheduledRefreshTimer = setTimeout(async () => {
     if (!scheduledRefreshActive) return
-    // If the timer woke up exactly at the deadline (delayMs > 0 path), fire
-    // refresh first; if the timer was a "reschedule based on disk" tick
-    // (delayMs === 0 after a successful refresh), skip the refresh and just
-    // recompute. The dueIn re-check inside scheduleNext distinguishes them.
+    // The dueIn re-check inside scheduleNext distinguishes "fire-now" from
+    // "reschedule-only" ticks: when the disk-state recompute lands inside
+    // the buffer window, scheduleNext emits the immediate-refresh log line;
+    // otherwise it just arms the next timer silently.
     void scheduleNext(store, bufferMs, failureRetryMs)
   }, delayMs)
   if (scheduledRefreshTimer && (scheduledRefreshTimer as { unref?: () => void }).unref) {

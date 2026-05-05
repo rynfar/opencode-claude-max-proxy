@@ -201,6 +201,27 @@ export function profileList(): void {
   printEnvHint(profiles)
 }
 
+/**
+ * Pure: resolve which on-disk directories should be removed when this profile
+ * is deleted. Browser-login profiles drop their explicit `claudeConfigDir`
+ * (provided it lives under `profilesDir`); oauth-token profiles drop the
+ * pinned isolation dir at `profilesDir/<id>` (created by the SDK during use,
+ * not stored on the profile itself).
+ *
+ * Caller is responsible for the actual `rmSync` — this returns paths only.
+ */
+export function dirsToRemoveOnProfileRemove(profile: ProfileConfig, profilesDir: string): string[] {
+  const dirs: string[] = []
+  if (profile.claudeConfigDir && profile.claudeConfigDir.startsWith(profilesDir)) {
+    dirs.push(profile.claudeConfigDir)
+  }
+  if (profile.oauthToken || profile.type === "oauth-token") {
+    const isolationDir = join(profilesDir, profile.id)
+    if (!dirs.includes(isolationDir)) dirs.push(isolationDir)
+  }
+  return dirs
+}
+
 export function profileRemove(id: string): void {
   const profiles = loadProfileConfig()
   const idx = profiles.findIndex(p => p.id === id)
@@ -209,13 +230,13 @@ export function profileRemove(id: string): void {
     process.exit(1)
   }
 
-  const configDir = profiles[idx]!.claudeConfigDir ?? ""
+  const removed = profiles[idx]!
+  const dirsToRemove = dirsToRemoveOnProfileRemove(removed, PROFILES_DIR)
   profiles.splice(idx, 1)
   saveProfileConfig(profiles)
 
-  // Remove the config directory
-  if (configDir && existsSync(configDir) && configDir.startsWith(PROFILES_DIR)) {
-    rmSync(configDir, { recursive: true, force: true })
+  for (const dir of dirsToRemove) {
+    if (existsSync(dir)) rmSync(dir, { recursive: true, force: true })
   }
 
   console.log(`\x1b[32m✓ Profile "${id}" removed.\x1b[0m`)

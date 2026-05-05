@@ -276,3 +276,59 @@ describe("profile-scoped session isolation", () => {
     expect(result.env.CLAUDE_CONFIG_DIR).toBe("/home/.claude")
   })
 })
+
+// ---------------------------------------------------------------------------
+// dirsToRemoveOnProfileRemove — pure helper covering the cleanup paths.
+//
+// Regression target: oauth-token profiles store no `claudeConfigDir` on the
+// profile itself, so the original profileRemove bypassed any dir cleanup and
+// left the SDK-populated isolation dir at PROFILES_DIR/<id> orphaned forever.
+// ---------------------------------------------------------------------------
+describe("dirsToRemoveOnProfileRemove", () => {
+  const PROFILES_DIR = "/tmp/test-profiles-dir"
+
+  test("browser-login profile drops its claudeConfigDir when under PROFILES_DIR", async () => {
+    const { dirsToRemoveOnProfileRemove } = await import("../proxy/profileCli")
+    const dirs = dirsToRemoveOnProfileRemove(
+      { id: "personal", claudeConfigDir: `${PROFILES_DIR}/personal` },
+      PROFILES_DIR,
+    )
+    expect(dirs).toEqual([`${PROFILES_DIR}/personal`])
+  })
+
+  test("never returns a claudeConfigDir outside PROFILES_DIR (refuses to rm-rf foreign paths)", async () => {
+    const { dirsToRemoveOnProfileRemove } = await import("../proxy/profileCli")
+    const dirs = dirsToRemoveOnProfileRemove(
+      { id: "wild", claudeConfigDir: "/home/user/.claude" },
+      PROFILES_DIR,
+    )
+    expect(dirs).toEqual([])
+  })
+
+  test("oauth-token profile drops the pinned isolation dir at PROFILES_DIR/<id>", async () => {
+    const { dirsToRemoveOnProfileRemove } = await import("../proxy/profileCli")
+    const dirs = dirsToRemoveOnProfileRemove(
+      { id: "ci", oauthToken: "sk-ant-oat01-xxx" },
+      PROFILES_DIR,
+    )
+    expect(dirs).toEqual([`${PROFILES_DIR}/ci`])
+  })
+
+  test("explicit type='oauth-token' without oauthToken still drops the isolation dir", async () => {
+    const { dirsToRemoveOnProfileRemove } = await import("../proxy/profileCli")
+    const dirs = dirsToRemoveOnProfileRemove(
+      { id: "bare-ci", type: "oauth-token" },
+      PROFILES_DIR,
+    )
+    expect(dirs).toEqual([`${PROFILES_DIR}/bare-ci`])
+  })
+
+  test("api profile returns no dirs (token lives in profiles.json, no on-disk state)", async () => {
+    const { dirsToRemoveOnProfileRemove } = await import("../proxy/profileCli")
+    const dirs = dirsToRemoveOnProfileRemove(
+      { id: "direct-api", type: "api", apiKey: "sk-ant-api03-..." },
+      PROFILES_DIR,
+    )
+    expect(dirs).toEqual([])
+  })
+})

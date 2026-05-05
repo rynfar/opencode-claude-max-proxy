@@ -332,6 +332,14 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
 
   // Optional API key auth — protects all routes except / and /health
   // when MERIDIAN_API_KEY is set. No-op when unset.
+  //
+  // When adding a new sensitive prefix, add it here. The audit test in
+  // proxy-settings-auth.test.ts walks every registered route and fails CI
+  // if any non-public path responds with anything other than 401 to an
+  // unauthenticated request. That's the safety net against the next "we
+  // forgot to gate it" mistake (issue #477 was the catalyst — `/settings/*`
+  // was registered without going through requireAuth, so unauthenticated
+  // callers could mutate adapter SDK feature config via PATCH).
   app.use("/v1/*", requireAuth)
   app.use("/messages", requireAuth)
   app.use("/telemetry/*", requireAuth)
@@ -341,6 +349,8 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
   app.use("/profiles", requireAuth)
   app.use("/plugins/*", requireAuth)
   app.use("/plugins", requireAuth)
+  app.use("/settings/*", requireAuth)
+  app.use("/settings", requireAuth)
   app.use("/auth/*", requireAuth)
 
   app.get("/", (c) => {

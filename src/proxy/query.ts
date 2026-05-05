@@ -14,10 +14,17 @@ import { createPassthroughMcpServer, PASSTHROUGH_MCP_NAME } from "./passthroughT
  * Return a copy of `env` with `CLAUDE_CONFIG_DIR` removed. Used by the
  * sharedMemory branch — see the comment at the env construction site.
  *
+ * Skips the strip when `CLAUDE_CODE_OAUTH_TOKEN` is present: oauth-token
+ * profiles deliberately pin a per-profile config dir so the SDK's
+ * 401-recovery cannot silently fall back to host `~/.claude` credentials
+ * and swap a refreshed token in for the env-provided one (closes #446).
+ * Stripping the pin would defeat that isolation.
+ *
  * Pure function: never mutates the input.
  */
 function stripConfigDir(env: Record<string, string | undefined>): Record<string, string | undefined> {
   if (!("CLAUDE_CONFIG_DIR" in env)) return env
+  if (env.CLAUDE_CODE_OAUTH_TOKEN) return env
   const out = { ...env }
   delete out.CLAUDE_CONFIG_DIR
   return out

@@ -326,6 +326,28 @@ describe("buildQueryOptions", () => {
     expect(env.CLAUDE_CONFIG_DIR).toBeUndefined()
   })
 
+  // sharedMemory must NOT strip CLAUDE_CONFIG_DIR when the profile carries an
+  // explicit CLAUDE_CODE_OAUTH_TOKEN. Stripping it lets the SDK's 401-recovery
+  // silently fall back to host ~/.claude credentials and swap a refreshed
+  // token in for the env-provided one — making the oauth-token profile a
+  // no-op against any host with an active claude login.
+  // The whole point of pinning the per-profile isolation dir (see
+  // buildResolvedProfile in profiles.ts) is to prevent that fallback.
+  it("preserves CLAUDE_CONFIG_DIR with sharedMemory=true when CLAUDE_CODE_OAUTH_TOKEN is present", () => {
+    const result = buildQueryOptions(makeContext({
+      sharedMemory: true,
+      cleanEnv: {
+        CLAUDE_CONFIG_DIR: "/Users/me/.config/meridian/profiles/ci",
+        CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-test",
+        SOMETHING_ELSE: "keep-me",
+      },
+    }))
+    const env = (result.options as any).env
+    expect(env.CLAUDE_CONFIG_DIR).toBe("/Users/me/.config/meridian/profiles/ci")
+    expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe("sk-ant-oat01-test")
+    expect(env.SOMETHING_ELSE).toBe("keep-me")
+  })
+
   // ── codeSystemPrompt / clientSystemPrompt controls ────────────────
 
   it("forces preset when codeSystemPrompt is true even in passthrough", () => {

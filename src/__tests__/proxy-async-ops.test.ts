@@ -28,7 +28,26 @@ describe("proxy async ops", () => {
     if (body.status === "healthy") {
       expect(typeof body.auth.loggedIn).toBe("boolean")
       expect(body.auth.loggedIn).toBe(true)
-      expect(Object.keys(body).sort()).toEqual(["auth", "mode", "plugin", "status", "version"])
+      // claudeExecutable is present when the resolver has run (lazy init —
+      // populated on the first SDK call or eager by startProxyServer). When
+      // present it carries the resolved path + which step produced it
+      // (added in #478 follow-up so users can self-diagnose "wrong claude
+      // got picked"). Accept either shape so this test is independent of
+      // whether a sibling test already triggered resolution in the same
+      // process.
+      const expectedKeys = ["auth", "mode", "plugin", "status", "version"]
+      if (body.claudeExecutable !== undefined) {
+        expect(typeof body.claudeExecutable.path).toBe("string")
+        expect([
+          "env",
+          "bundled",
+          "platform-package",
+          "path-lookup",
+          "legacy-cli-js",
+        ]).toContain(body.claudeExecutable.source)
+        expectedKeys.push("claudeExecutable")
+      }
+      expect(Object.keys(body).sort()).toEqual(expectedKeys.sort())
     }
 
     if (body.status === "unhealthy") {

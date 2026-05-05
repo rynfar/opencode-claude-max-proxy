@@ -269,7 +269,26 @@ export async function getClaudeAuthStatusAsync(profileId?: string, envOverrides?
 
 // --- Claude Executable Resolution ---
 
-let cachedClaudePath: string | null = null
+/**
+ * Tag identifying which resolver step produced the path. Surfaced at startup
+ * and in `/health` so users can self-diagnose "wrong claude got picked"
+ * without having to inspect their PATH manually (closes the diagnostic gap
+ * from #478, where a Bun-shimmed `claude` on PATH led to silent failures
+ * that looked indistinguishable from any other SDK error).
+ */
+export type ClaudeExecutableSource =
+  | "env"               // MERIDIAN_CLAUDE_PATH override
+  | "bundled"           // node_modules/@anthropic-ai/claude-code/bin/claude.exe
+  | "platform-package"  // @anthropic-ai/claude-code-<platform>-<arch>/claude
+  | "path-lookup"       // `which`/`where claude` PATH lookup
+  | "legacy-cli-js"     // SDK cli.js fallback (Bun-only)
+
+export interface ClaudeExecutableInfo {
+  path: string
+  source: ClaudeExecutableSource
+}
+
+let cachedClaudeInfo: ClaudeExecutableInfo | null = null
 let cachedClaudePathPromise: Promise<string> | null = null
 
 /**
@@ -422,29 +441,60 @@ function tryLegacySdkCliJs(deps: ResolverDeps): string | null {
 }
 
 /**
- * Pure resolver — runs each step and returns the first hit, or null when
- * all steps miss. Exported for unit tests; production callers use
- * resolveClaudeExecutableAsync, which adds caching on top.
+ * Pure resolver, source-aware variant — runs each step and returns the
+ * first hit (path + source tag), or null when all steps miss.
+ *
+ * Order matters: `env` wins unconditionally (operator escape hatch), then
+ * `bundled` (the path the SDK expects), then `platform-package` (postinstall
+ * fallback), then `path-lookup` (system PATH — most likely to surface
+ * unintended shims, see #478), then `legacy-cli-js` (only matters on stale
+ * Bun installs of SDK < 0.2.98).
+ */
+export async function resolveClaudeExecutableWithSource(
+  deps: ResolverDeps = DEFAULT_DEPS,
+): Promise<ClaudeExecutableInfo | null> {
+  const env = tryEnvOverride(deps)
+  if (env) return { path: env, source: "env" }
+  const bundled = tryBundledBinary(deps)
+  if (bundled) return { path: bundled, source: "bundled" }
+  const platformPkg = tryPlatformPackage(deps)
+  if (platformPkg) return { path: platformPkg, source: "platform-package" }
+  const pathLookup = await tryPathLookup(deps)
+  if (pathLookup) return { path: pathLookup, source: "path-lookup" }
+  const legacy = tryLegacySdkCliJs(deps)
+  if (legacy) return { path: legacy, source: "legacy-cli-js" }
+  return null
+}
+
+/**
+ * Pure resolver — returns the path string only. Kept for callers that
+ * don't need the source tag (existing behavior; preserves the existing
+ * test surface in claude-executable-resolver.test.ts).
  */
 export async function resolveClaudeExecutable(deps: ResolverDeps = DEFAULT_DEPS): Promise<string | null> {
-  return (
-    tryEnvOverride(deps) ??
-    tryBundledBinary(deps) ??
-    tryPlatformPackage(deps) ??
-    (await tryPathLookup(deps)) ??
-    tryLegacySdkCliJs(deps)
-  )
+  const info = await resolveClaudeExecutableWithSource(deps)
+  return info?.path ?? null
+}
+
+/**
+ * Returns the cached resolved-executable info — `null` if
+ * `resolveClaudeExecutableAsync` hasn't run yet. Used by `/health` and the
+ * startup log so the resolver only runs once and both surfaces see the
+ * same answer.
+ */
+export function getResolvedClaudeExecutableInfo(): ClaudeExecutableInfo | null {
+  return cachedClaudeInfo
 }
 
 export async function resolveClaudeExecutableAsync(): Promise<string> {
-  if (cachedClaudePath) return cachedClaudePath
+  if (cachedClaudeInfo) return cachedClaudeInfo.path
   if (cachedClaudePathPromise) return cachedClaudePathPromise
 
   cachedClaudePathPromise = (async () => {
-    const resolved = await resolveClaudeExecutable()
+    const resolved = await resolveClaudeExecutableWithSource()
     if (resolved) {
-      cachedClaudePath = resolved
-      return resolved
+      cachedClaudeInfo = resolved
+      return resolved.path
     }
     throw new Error(
       "Could not find Claude Code executable. Install via: npm install -g @anthropic-ai/claude-code, " +
@@ -461,7 +511,7 @@ export async function resolveClaudeExecutableAsync(): Promise<string> {
 
 /** Reset cached path — for testing only */
 export function resetCachedClaudePath(): void {
-  cachedClaudePath = null
+  cachedClaudeInfo = null
   cachedClaudePathPromise = null
 }
 

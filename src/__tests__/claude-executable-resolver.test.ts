@@ -9,7 +9,7 @@
  */
 import { describe, it, expect } from "bun:test"
 import { join, dirname } from "path"
-import { resolveClaudeExecutable } from "../proxy/models"
+import { resolveClaudeExecutable, resolveClaudeExecutableWithSource } from "../proxy/models"
 
 // `path.join` produces backslashed paths on Windows and slash-separated paths
 // on POSIX. Tests use `J(...)` and `BIN(pkgJson, ...rest)` everywhere a path
@@ -388,5 +388,100 @@ describe("resolveClaudeExecutable: priority ordering", () => {
       exec: async () => ({ stdout: "" }),
     })
     expect(await resolveClaudeExecutable(deps)).toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// resolveClaudeExecutableWithSource — same resolver, but the result also
+// reports which step produced the hit. Used at startup logging and in /health
+// so users can self-diagnose "wrong claude got picked" without playing
+// detective on their PATH (closes diagnostic gap from issue #478).
+// ---------------------------------------------------------------------------
+
+describe("resolveClaudeExecutableWithSource", () => {
+  it("reports source 'env' when MERIDIAN_CLAUDE_PATH wins", async () => {
+    const deps = makeDeps({
+      envGet: (n) => (n === "MERIDIAN_CLAUDE_PATH" ? "/custom/claude" : undefined),
+      existsSync: (p) => p === "/custom/claude",
+    })
+    expect(await resolveClaudeExecutableWithSource(deps)).toEqual({
+      path: "/custom/claude",
+      source: "env",
+    })
+  })
+
+  it("reports source 'bundled' when claude-code/bin/claude.exe wins", async () => {
+    const pkgJson = "/m/cc/package.json"
+    const expectedBin = BIN(pkgJson, "bin", "claude.exe")
+    const deps = makeDeps({
+      resolvePackage: (s) => {
+        if (s === "@anthropic-ai/claude-code/package.json") return pkgJson
+        throw new Error("not configured")
+      },
+      existsSync: (p) => p === expectedBin,
+      statSync: () => ({ size: 200_000_000 }), // real binary
+    })
+    expect(await resolveClaudeExecutableWithSource(deps)).toEqual({
+      path: expectedBin,
+      source: "bundled",
+    })
+  })
+
+  it("reports source 'platform-package' when peer pkg wins after bundled stub", async () => {
+    const platformPkg = "/m/cc-d-a/package.json"
+    const platformBin = BIN(platformPkg, "claude")
+    const deps = makeDeps({
+      platform: "darwin",
+      arch: "arm64",
+      resolvePackage: (s) => {
+        if (s === "@anthropic-ai/claude-code-darwin-arm64/package.json") return platformPkg
+        throw new Error("not configured")
+      },
+      existsSync: (p) => p === platformBin,
+    })
+    expect(await resolveClaudeExecutableWithSource(deps)).toEqual({
+      path: platformBin,
+      source: "platform-package",
+    })
+  })
+
+  it("reports source 'path-lookup' when which/where claude wins", async () => {
+    const deps = makeDeps({
+      platform: "linux",
+      resolvePackage: () => { throw new Error("not installed") },
+      existsSync: (p) => p === "/usr/local/bin/claude",
+      exec: async () => ({ stdout: "/usr/local/bin/claude\n" }),
+    })
+    expect(await resolveClaudeExecutableWithSource(deps)).toEqual({
+      path: "/usr/local/bin/claude",
+      source: "path-lookup",
+    })
+  })
+
+  it("reports source 'legacy-cli-js' when only the SDK cli.js fallback hits", async () => {
+    const sdkPkg = "/m/sdk/package.json"
+    const cliJs = BIN(sdkPkg, "cli.js")
+    const deps = makeDeps({
+      isBun: true,
+      resolvePackage: (s) => {
+        if (s === "@anthropic-ai/claude-agent-sdk") return sdkPkg
+        throw new Error("not configured")
+      },
+      existsSync: (p) => p === cliJs,
+    })
+    expect(await resolveClaudeExecutableWithSource(deps)).toEqual({
+      path: cliJs,
+      source: "legacy-cli-js",
+    })
+  })
+
+  it("returns null when every source misses (matches resolveClaudeExecutable)", async () => {
+    const deps = makeDeps({
+      envGet: () => undefined,
+      resolvePackage: () => { throw new Error("nope") },
+      existsSync: () => false,
+      exec: async () => ({ stdout: "" }),
+    })
+    expect(await resolveClaudeExecutableWithSource(deps)).toBeNull()
   })
 })

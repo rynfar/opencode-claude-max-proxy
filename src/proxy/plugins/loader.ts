@@ -93,8 +93,22 @@ export async function loadPlugins(
       // Include a counter in addition to Date.now() — when reload fires
       // many times within the same millisecond (tests, hot iteration) the
       // timestamp alone collides and we serve the cached build.
+      //
+      // Specifier rules differ by platform:
+      //   - POSIX: pass the raw path + query. Bun keys the module cache off
+      //     the full specifier string, so `?t=...` busts the cache. Wrapping
+      //     the path in `pathToFileURL` here normalizes the URL and Bun
+      //     drops the query when computing the cache key — the reload no
+      //     longer takes effect.
+      //   - Windows: ESM rejects `import("C:\\...")` with `Received protocol c:`
+      //     because it parses `C:` as a URL scheme. We must hand it a
+      //     `file://` URL. The query stays meaningful as part of the
+      //     specifier (no normalization stripping observed there).
       const cacheBuster = `?t=${Date.now()}-${++loadCounter}`
-      const mod = await import(pathToFileURL(filePath).href + cacheBuster)
+      const specifier = process.platform === "win32"
+        ? pathToFileURL(filePath).href + cacheBuster
+        : filePath + cacheBuster
+      const mod = await import(specifier)
       const exported = mod.default ?? mod
 
       // Support single Transform or array of Transforms

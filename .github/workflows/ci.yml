@@ -54,6 +54,14 @@ jobs:
       - run: bun test src/__tests__/claude-executable-resolver.test.ts
         shell: bash
 
+      # Plugin loader exercises `await import(absolutePath)` which on Windows
+      # rejects raw backslash paths with `Received protocol c:`. The test
+      # writes a real plugin file to a tempdir and loads it, so it actually
+      # round-trips the buggy code path on the Windows runtime — keeps regressions
+      # in `loader.ts`'s URL handling from sneaking back in. See PR #480.
+      - run: bun test src/__tests__/plugin-loader.test.ts
+        shell: bash
+
       # Build the bundle.
       - run: bun run build
         shell: bash

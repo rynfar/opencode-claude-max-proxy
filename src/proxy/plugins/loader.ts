@@ -1,5 +1,6 @@
 import { readdirSync, readFileSync, existsSync } from "fs"
 import { join, isAbsolute, extname } from "path"
+import { pathToFileURL } from "url"
 import type { Transform } from "../transform"
 import type { PluginEntry, PluginConfig, LoadedPlugin } from "./types"
 import { validateTransform } from "./validation"
@@ -93,7 +94,7 @@ export async function loadPlugins(
       // many times within the same millisecond (tests, hot iteration) the
       // timestamp alone collides and we serve the cached build.
       const cacheBuster = `?t=${Date.now()}-${++loadCounter}`
-      const mod = await import(filePath + cacheBuster)
+      const mod = await import(pathToFileURL(filePath).href + cacheBuster)
       const exported = mod.default ?? mod
 
       // Support single Transform or array of Transforms

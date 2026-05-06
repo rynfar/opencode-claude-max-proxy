@@ -197,6 +197,13 @@ function resolveSystemPrompt(
       : { systemPrompt: { type: "preset" as const, preset: "claude_code" as const } }
   }
   if (append) return { systemPrompt: append }
+  // Defensive: when `codeSystemPrompt: false` is explicit and there's
+  // nothing to append, force an empty-string system prompt so the SDK
+  // can't fall back to the claude_code preset. Returning `{}` would leave
+  // `systemPrompt` undefined and let downstream defaults reintroduce the
+  // preset. (#489 follow-up — low impact in practice since most callers
+  // send a `system` field; belt-and-suspenders for the empty case.)
+  if (codeSystemPrompt === false) return { systemPrompt: "" }
   return {}
 }
 
@@ -233,6 +240,27 @@ export function buildQueryOptions(ctx: QueryContext): BuildQueryResult {
       ...resolveSystemPrompt(systemContext, passthrough, settingSources, codeSystemPrompt, clientSystemPrompt, cwdNote),
       ...(passthrough
         ? {
+            // Strip the SDK's ~25k-token built-in tool catalog from the
+            // upstream request. Passthrough mode never intends to invoke
+            // SDK built-ins (Read/Write/Bash/etc.) — those are the calling
+            // client's responsibility. `disallowedTools` below blocks
+            // invocation at runtime; it does NOT remove the definitions
+            // from the upstream payload. Setting `tools: []` elides the
+            // catalog from the request body. Closes #489 (diagnosis by
+            // @albe-jj).
+            tools: [],
+            // Explicitly disable claude-code's default settings loading.
+            // Without this, claude-code falls back to its built-in default
+            // (load user + project + local) and slurps CLAUDE.md from the
+            // proxy host's cwd into the system prompt — ~hundreds-to-
+            // thousands of tokens of unintended context that has no
+            // business in chat-style passthrough requests (LiteLLM, custom
+            // chat apps, etc.). Empty array → SDK emits `--setting-sources=`
+            // → subprocess loads nothing. The lower-down `settingSources &&
+            // settingSources.length > 0` block still wins when the user
+            // sets `claudeMd` to "project" or "full" because object spread
+            // order gives the later assignment the final word.
+            settingSources: [],
             disallowedTools: [...allBlockedTools],
             ...(passthroughMcp ? {
               allowedTools: [...passthroughMcp.toolNames],

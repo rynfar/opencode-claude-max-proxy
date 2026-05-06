@@ -182,6 +182,95 @@ describe("buildQueryOptions", () => {
     expect(allowed).toContain("mcp__passthrough__custom_tool")
   })
 
+  // ─── tools catalog stripping in passthrough — issue #489 ──────────────
+  //
+  // The SDK option `tools` controls which built-in tool *definitions* are
+  // sent upstream to Claude. Distinct from `disallowedTools` which only
+  // blocks invocation at runtime. Without `tools: []`, the SDK ships its
+  // full ~25k-token built-in catalog on every request even when we don't
+  // intend to use it. Passthrough mode should send an empty catalog so
+  // the upstream payload only carries the user's actual content +
+  // whatever MCP tools the client supplied. (Diagnosis by @albe-jj.)
+
+  it("strips the SDK built-in tool catalog in passthrough mode (tools=[])", () => {
+    const result = buildQueryOptions(makeContext({ passthrough: true }))
+    expect((result.options as any).tools).toEqual([])
+  })
+
+  it("strips the catalog even when passthroughMcp tools are present", () => {
+    const mockPassthroughMcp = {
+      toolNames: ["mcp__passthrough__custom_tool"],
+      server: {} as any,
+      hasDeferredTools: false,
+    }
+    const result = buildQueryOptions(makeContext({
+      passthrough: true,
+      passthroughMcp: mockPassthroughMcp,
+    }))
+    // Catalog is empty — built-ins disabled.
+    expect((result.options as any).tools).toEqual([])
+    // MCP tools still flow through allowedTools (separate channel).
+    const allowed = (result.options as any).allowedTools as string[]
+    expect(allowed).toContain("mcp__passthrough__custom_tool")
+  })
+
+  it("does NOT set tools: [] in non-passthrough mode (catalog must remain available)", () => {
+    // OpenCode and other coding-agent adapters need the SDK to invoke
+    // built-ins like Read/Write/Bash. The catalog stays the SDK default.
+    const result = buildQueryOptions(makeContext({ passthrough: false }))
+    expect((result.options as any).tools).toBeUndefined()
+  })
+
+  // ─── settingSources stripping in passthrough — #489 follow-up ────────
+  //
+  // When `claudeMd: "off"` (the passthrough default), server.ts produces
+  // `settingSources = []`. The lower spread block in query.ts gates on
+  // `length > 0`, so the empty array is silently dropped and the SDK
+  // never emits `--setting-sources=`. Without that flag, claude-code's
+  // subprocess falls back to its built-in default and loads
+  // user/project/local CLAUDE.md — adding ~hundreds-to-thousands of
+  // tokens of unintended context to every passthrough request. Found
+  // during the E2E audit while verifying the tools-catalog fix above
+  // (response said "I've got the context from your CLAUDE.md file"
+  // even with codeSystemPrompt: false). Pin `settingSources: []`
+  // explicitly in the passthrough branch so the empty array survives.
+
+  it("forces settingSources: [] in passthrough mode so claude-code skips CLAUDE.md", () => {
+    const result = buildQueryOptions(makeContext({ passthrough: true }))
+    expect((result.options as any).settingSources).toEqual([])
+  })
+
+  it("settingSources from caller still wins in passthrough when claudeMd is project/full", () => {
+    // server.ts resolves claudeMd="project" → settingSources=["project"];
+    // the later spread block in buildQueryOptions overwrites the
+    // passthrough default of `[]` because object spread keeps the last
+    // assignment. This preserves the user's explicit opt-in to load
+    // their project CLAUDE.md.
+    const result = buildQueryOptions(makeContext({
+      passthrough: true,
+      settingSources: ["project"] as any,
+    }))
+    expect((result.options as any).settingSources).toEqual(["project"])
+  })
+
+  // ─── resolveSystemPrompt defensive empty-string ───────────────────────
+  //
+  // If `codeSystemPrompt: false` is set explicitly AND there's no client
+  // system prompt AND no cwdNote to append, the previous code returned
+  // `{}` (no systemPrompt option) and let the SDK fall back to whatever
+  // default was in effect. Force an empty string so the preset can't
+  // sneak back in via that path.
+
+  it("returns systemPrompt: '' when codeSystemPrompt=false and there's nothing to append", () => {
+    const result = buildQueryOptions(makeContext({
+      passthrough: true,
+      codeSystemPrompt: false,
+      systemContext: "",
+      // No clientWorkingDirectory so cwdNote is empty
+    }))
+    expect((result.options as any).systemPrompt).toBe("")
+  })
+
   it("strips API keys from environment", () => {
     const result = buildQueryOptions(makeContext({
       cleanEnv: { HOME: "/home/user", SOME_VAR: "value" },
@@ -372,12 +461,16 @@ describe("buildQueryOptions", () => {
     expect(sp).toBe("Agent instructions")
   })
 
-  it("omits systemPrompt entirely when codeSystemPrompt false and no systemContext", () => {
+  it("forces systemPrompt='' when codeSystemPrompt false and no systemContext (defensive against preset fallback)", () => {
+    // Previously this asserted `undefined` — but leaving systemPrompt
+    // undefined lets the SDK fall back to the claude_code preset by
+    // default. The defensive empty-string form forecloses that path
+    // (#489 follow-up).
     const result = buildQueryOptions(makeContext({
       systemContext: "",
       codeSystemPrompt: false,
     }))
-    expect((result.options as any).systemPrompt).toBeUndefined()
+    expect((result.options as any).systemPrompt).toBe("")
   })
 
   it("shows preset without append when codeSystemPrompt true but clientSystemPrompt false", () => {
@@ -425,12 +518,14 @@ describe("buildQueryOptions", () => {
     expect(opts.settingSources).toEqual(["user", "project"])
   })
 
-  it("disabling both prompts produces no systemPrompt", () => {
+  it("disabling both prompts forces systemPrompt='' (defensive against preset fallback)", () => {
+    // Same defensive change as above — explicit empty rather than
+    // undefined so the SDK can't reintroduce the preset.
     const result = buildQueryOptions(makeContext({
       systemContext: "Agent instructions",
       codeSystemPrompt: false,
       clientSystemPrompt: false,
     }))
-    expect((result.options as any).systemPrompt).toBeUndefined()
+    expect((result.options as any).systemPrompt).toBe("")
   })
 })

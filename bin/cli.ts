@@ -2,8 +2,9 @@
 
 import { createRequire } from "module"
 import { startProxyServer } from "../src/proxy/server"
-import { exec as execCallback } from "child_process"
+import { exec as execCallback, execFile as execFileCallback } from "child_process"
 import { promisify } from "util"
+import { resolveClaudeExecutableAsync } from "../src/proxy/models"
 
 const require = createRequire(import.meta.url)
 const { version } = require("../package.json")
@@ -99,6 +100,7 @@ if (args[0] === "refresh-token") {
 }
 
 const exec = promisify(execCallback)
+const execFile = promisify(execFileCallback)
 
 // Prevent SDK subprocess crashes from killing the proxy
 process.on("uncaughtException", (err) => {
@@ -134,9 +136,22 @@ try {
   console.error(`[meridian] Failed to parse MERIDIAN_PROFILES: ${e instanceof Error ? e.message : e}`)
 }
 
+/**
+ * Run the CLI default action (start the proxy server).
+ *
+ * @param start  Server bootstrap (overridable for tests).
+ * @param runAuthCheck  Pre-flight `claude auth status` runner. Default
+ *   resolves the bundled/platform-package binary via
+ *   `resolveClaudeExecutableAsync` and runs `<resolved> auth status` via
+ *   `execFile` — does NOT depend on `claude` being on PATH (#478). Tests
+ *   override this to simulate ENOENT / non-zero exit / malformed JSON.
+ */
 export async function runCli(
   start = startProxyServer,
-  runExec: typeof exec = exec
+  runAuthCheck: () => Promise<{ stdout: string }> = async () => {
+    const claudePath = await resolveClaudeExecutableAsync()
+    return execFile(claudePath, ["auth", "status"], { timeout: 5000 })
+  }
 ) {
   // Plugin check — warn if OpenCode config exists but meridian plugin is missing
   try {
@@ -152,9 +167,10 @@ export async function runCli(
     }
   } catch { /* non-fatal */ }
 
-  // Pre-flight auth check
+  // Pre-flight auth check — runs the resolved Claude binary's auth-status
+  // subcommand. Independent of whether `claude` is on PATH (#478).
   try {
-    const { stdout } = await runExec("claude auth status", { timeout: 5000 })
+    const { stdout } = await runAuthCheck()
     const auth = JSON.parse(stdout)
     if (!auth.loggedIn) {
       console.error("\x1b[31m✗ Not logged in to Claude.\x1b[0m Run: claude login")

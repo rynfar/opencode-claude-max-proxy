@@ -11,9 +11,10 @@
 
 import { mkdirSync, existsSync, rmSync, readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
-import { execSync, spawnSync } from "node:child_process"
+import { execFileSync, spawnSync } from "node:child_process"
 import { homedir } from "node:os"
 import type { ProfileConfig } from "./profiles"
+import { resolveClaudeExecutableSync } from "./models"
 import { setSetting } from "./settings"
 
 const PROFILES_DIR = join(homedir(), ".config", "meridian", "profiles")
@@ -43,8 +44,20 @@ function saveProfileConfig(profiles: ProfileConfig[]): void {
 }
 
 function getAuthStatus(configDir: string): { loggedIn: boolean; email?: string; subscriptionType?: string } {
+  // Route through the synchronous resolver instead of relying on `claude`
+  // being on PATH (#478). The CLI command runs in whatever environment
+  // the user invokes it — under systemd or bunx-without-global-claude,
+  // PATH won't have a claude binary even when meridian's own bundled or
+  // platform-package binary is right there in node_modules.
+  const resolved = resolveClaudeExecutableSync()
+  if (!resolved) {
+    console.warn(`[meridian] Could not resolve a Claude executable for auth check (set MERIDIAN_CLAUDE_PATH or install @anthropic-ai/claude-code)`)
+    return { loggedIn: false }
+  }
   try {
-    const result = execSync("claude auth status", {
+    // execFileSync (vs execSync) avoids quoting issues with spaces in the
+    // resolved path and bypasses the shell entirely — no PATH lookup.
+    const result = execFileSync(resolved.path, ["auth", "status"], {
       timeout: 5000,
       env: { ...process.env, CLAUDE_CONFIG_DIR: configDir },
       stdio: ["pipe", "pipe", "pipe"],
@@ -119,8 +132,15 @@ export function profileAdd(id: string): void {
   console.log("  Press Ctrl+C to cancel, or wait for the browser to open...")
   console.log()
 
-  // Run claude auth login with the profile's config dir
-  const result = spawnSync("claude", ["auth", "login"], {
+  // Run claude auth login with the profile's config dir. Route through
+  // the sync resolver so we don't depend on `claude` being on PATH (#478).
+  const resolvedAuth = resolveClaudeExecutableSync()
+  if (!resolvedAuth) {
+    console.error("\x1b[31m✗ Could not find a Claude executable to run auth login.\x1b[0m")
+    console.error("  Install via: npm install -g @anthropic-ai/claude-code, or set MERIDIAN_CLAUDE_PATH=/path/to/claude")
+    process.exit(1)
+  }
+  const result = spawnSync(resolvedAuth.path, ["auth", "login"], {
     env: { ...process.env, CLAUDE_CONFIG_DIR: configDir },
     stdio: "inherit",
   })
@@ -290,7 +310,14 @@ export function profileLogin(id: string): void {
   console.log("\x1b[33m⚠ Make sure you're signed into the correct Claude account in your browser.\x1b[0m")
   console.log()
 
-  const result = spawnSync("claude", ["auth", "login"], {
+  // Route through the sync resolver — see profileAdd above (#478).
+  const resolvedLogin = resolveClaudeExecutableSync()
+  if (!resolvedLogin) {
+    console.error("\x1b[31m✗ Could not find a Claude executable to run auth login.\x1b[0m")
+    console.error("  Install via: npm install -g @anthropic-ai/claude-code, or set MERIDIAN_CLAUDE_PATH=/path/to/claude")
+    process.exit(1)
+  }
+  const result = spawnSync(resolvedLogin.path, ["auth", "login"], {
     env: { ...process.env, CLAUDE_CONFIG_DIR: profile.claudeConfigDir },
     stdio: "inherit",
   })

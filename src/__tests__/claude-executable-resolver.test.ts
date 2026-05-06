@@ -9,7 +9,7 @@
  */
 import { describe, it, expect } from "bun:test"
 import { join, dirname } from "path"
-import { resolveClaudeExecutable, resolveClaudeExecutableWithSource } from "../proxy/models"
+import { resolveClaudeExecutable, resolveClaudeExecutableWithSource, resolveClaudeExecutableSync } from "../proxy/models"
 
 // `path.join` produces backslashed paths on Windows and slash-separated paths
 // on POSIX. Tests use `J(...)` and `BIN(pkgJson, ...rest)` everywhere a path
@@ -483,5 +483,96 @@ describe("resolveClaudeExecutableWithSource", () => {
       exec: async () => ({ stdout: "" }),
     })
     expect(await resolveClaudeExecutableWithSource(deps)).toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// resolveClaudeExecutableSync — synchronous subset used by CLI commands
+// (`meridian profile list`, etc.) that can't await. Skips the async PATH
+// lookup and the legacy SDK cli.js fallback. Closes the diagnostic gap
+// from #478 where Stefan's auth-status checks failed because they spawned
+// `claude` via shell PATH instead of routing through the resolver.
+// ---------------------------------------------------------------------------
+
+describe("resolveClaudeExecutableSync", () => {
+  it("reports source 'env' when MERIDIAN_CLAUDE_PATH wins", () => {
+    const deps = makeDeps({
+      envGet: (n) => (n === "MERIDIAN_CLAUDE_PATH" ? "/custom/claude" : undefined),
+      existsSync: (p) => p === "/custom/claude",
+    })
+    expect(resolveClaudeExecutableSync(deps)).toEqual({
+      path: "/custom/claude",
+      source: "env",
+    })
+  })
+
+  it("reports source 'bundled' when claude-code/bin/claude.exe wins", () => {
+    const pkgJson = "/m/cc/package.json"
+    const expectedBin = BIN(pkgJson, "bin", "claude.exe")
+    const deps = makeDeps({
+      resolvePackage: (s) => {
+        if (s === "@anthropic-ai/claude-code/package.json") return pkgJson
+        throw new Error("not configured")
+      },
+      existsSync: (p) => p === expectedBin,
+      statSync: () => ({ size: 200_000_000 }),
+    })
+    expect(resolveClaudeExecutableSync(deps)).toEqual({
+      path: expectedBin,
+      source: "bundled",
+    })
+  })
+
+  it("reports source 'platform-package' when peer pkg wins after bundled stub", () => {
+    const platformPkg = "/m/cc-d-a/package.json"
+    const platformBin = BIN(platformPkg, "claude")
+    const deps = makeDeps({
+      platform: "darwin",
+      arch: "arm64",
+      resolvePackage: (s) => {
+        if (s === "@anthropic-ai/claude-code-darwin-arm64/package.json") return platformPkg
+        throw new Error("not configured")
+      },
+      existsSync: (p) => p === platformBin,
+    })
+    expect(resolveClaudeExecutableSync(deps)).toEqual({
+      path: platformBin,
+      source: "platform-package",
+    })
+  })
+
+  it("returns null when env, bundled, and platform-pkg all miss (PATH lookup not attempted)", () => {
+    // Stefan's case: no MERIDIAN_CLAUDE_PATH, no bundled binary in this
+    // test, no platform peer package, no `claude` on PATH. The async
+    // resolver's PATH-lookup step is intentionally skipped here — sync
+    // exec of `which`/`where` is platform-fragile, and the audit showed
+    // bundled/platform-pkg covers every supported install layout.
+    const deps = makeDeps({
+      envGet: () => undefined,
+      resolvePackage: () => { throw new Error("nope") },
+      existsSync: () => false,
+    })
+    expect(resolveClaudeExecutableSync(deps)).toBeNull()
+  })
+
+  it("does NOT consult exec/PATH (purely synchronous deps)", () => {
+    // The sync resolver should not even *try* to call exec — that's the
+    // whole reason it exists. Pin the contract: pass an exec that throws
+    // and assert resolution still works via bundled.
+    const pkgJson = "/m/cc/package.json"
+    const expectedBin = BIN(pkgJson, "bin", "claude.exe")
+    const deps = makeDeps({
+      resolvePackage: (s) => {
+        if (s === "@anthropic-ai/claude-code/package.json") return pkgJson
+        throw new Error("not configured")
+      },
+      existsSync: (p) => p === expectedBin,
+      statSync: () => ({ size: 200_000_000 }),
+      exec: async () => { throw new Error("sync resolver must not call exec") },
+    })
+    expect(resolveClaudeExecutableSync(deps)).toEqual({
+      path: expectedBin,
+      source: "bundled",
+    })
   })
 })

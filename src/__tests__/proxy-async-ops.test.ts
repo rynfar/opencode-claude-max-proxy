@@ -82,7 +82,12 @@ describe("proxy async ops", () => {
           const { EventEmitter } = await import("events")
           return { server: new EventEmitter(), config: {}, close: async () => {} } as any
         },
-        (() => {
+        // Simulate the auth-status check throwing — same scenario as before
+        // (binary missing / spawn error). The injection point moved from
+        // `runExec` to `runAuthCheck` after #478, but the assertion is the
+        // same: when the check fails, the warning fires and the proxy still
+        // starts. Test name kept stable.
+        (async () => {
           throw new Error("spawn ENOENT")
         }) as any
       )

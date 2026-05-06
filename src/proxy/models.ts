@@ -2,13 +2,14 @@
  * Model mapping and Claude executable resolution.
  */
 
-import { exec as execCallback } from "child_process"
+import { exec as execCallback, execFile as execFileCallback } from "child_process"
 import { existsSync, statSync } from "fs"
 import { fileURLToPath } from "url"
 import { join, dirname } from "path"
 import { promisify } from "util"
 
 const exec = promisify(execCallback)
+const execFile = promisify(execFileCallback)
 
 /**
  * Files smaller than this are treated as the placeholder stub that
@@ -231,7 +232,17 @@ export async function getClaudeAuthStatusAsync(profileId?: string, envOverrides?
 
   c_promise = (async () => {
     try {
-      const { stdout } = await exec("claude auth status", {
+      // Route through the resolver instead of relying on `claude` being
+      // on PATH. Stefan's case (#478): bunx-installed meridian under
+      // systemd, no global claude binary — `exec("claude auth status")`
+      // fails before we ever spawn the SDK subprocess. The resolved
+      // executable comes from the same lookup chain that powers the SDK
+      // call (env > bundled > platform-package > PATH > legacy-cli-js),
+      // so this path works in every install layout the SDK already
+      // supports. execFile (vs exec) avoids any quoting issues with
+      // spaces in the resolved path.
+      const claudePath = await resolveClaudeExecutableAsync()
+      const { stdout } = await execFile(claudePath, ["auth", "status"], {
         timeout: 5000,
         ...(envOverrides ? { env: { ...process.env, ...envOverrides } } : {}),
       })
@@ -474,6 +485,36 @@ export async function resolveClaudeExecutableWithSource(
 export async function resolveClaudeExecutable(deps: ResolverDeps = DEFAULT_DEPS): Promise<string | null> {
   const info = await resolveClaudeExecutableWithSource(deps)
   return info?.path ?? null
+}
+
+/**
+ * Synchronous subset of the resolver. Used by CLI commands
+ * (`meridian profile list`, `profileAdd`, etc.) that can't await before
+ * spawning `claude auth status`.
+ *
+ * Skips two steps that the async resolver runs:
+ *   - `path-lookup` — running `which`/`where` synchronously is awkward
+ *     and platform-fragile; the audit showed bundled + platform-package
+ *     covers every supported install layout (npm-global, npx/bunx
+ *     download, Docker, NixOS).
+ *   - `legacy-cli-js` — only matters for stale Bun installs of SDK < 0.2.98.
+ *
+ * Closes the diagnostic gap from #478: `getAuthStatus` in profileCli.ts
+ * and `getClaudeAuthStatusAsync` in this file previously called
+ * `claude auth status` via shell, which fails when `claude` isn't on
+ * PATH (Stefan's case — bunx-installed meridian under systemd, no
+ * global claude). Both call sites now route through resolved paths.
+ */
+export function resolveClaudeExecutableSync(
+  deps: ResolverDeps = DEFAULT_DEPS,
+): ClaudeExecutableInfo | null {
+  const env = tryEnvOverride(deps)
+  if (env) return { path: env, source: "env" }
+  const bundled = tryBundledBinary(deps)
+  if (bundled) return { path: bundled, source: "bundled" }
+  const platformPkg = tryPlatformPackage(deps)
+  if (platformPkg) return { path: platformPkg, source: "platform-package" }
+  return null
 }
 
 /**

@@ -16,6 +16,7 @@ function makeContext(overrides: Partial<QueryContext> = {}): QueryContext {
     stream: false,
     sdkAgents: {},
     cleanEnv: {},
+    envOverrides: undefined,
     hasDeferredTools: false,
     isUndo: false,
     blockedTools: BLOCKED_BUILTIN_TOOLS,
@@ -43,6 +44,14 @@ describe("buildQueryOptions", () => {
     expect(result.options.maxTurns).toBe(200)
     expect(result.options.permissionMode).toBe("bypassPermissions")
     expect((result.options as any).includePartialMessages).toBeUndefined()
+  })
+
+  it("applies envOverrides after inherited env", () => {
+    const result = buildQueryOptions(makeContext({
+      cleanEnv: { ANTHROPIC_DEFAULT_OPUS_MODEL: "claude-opus-4-6" },
+      envOverrides: { ANTHROPIC_DEFAULT_OPUS_MODEL: "claude-opus-4-7" },
+    }))
+    expect(result.options.env?.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe("claude-opus-4-7")
   })
 
   it("sets includePartialMessages for streaming", () => {

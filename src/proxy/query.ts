@@ -58,6 +58,8 @@ export interface QueryContext {
   passthroughMcp?: ReturnType<typeof createPassthroughMcpServer>
   /** Cleaned environment variables (API keys stripped) */
   cleanEnv: Record<string, string | undefined>
+  /** Per-request env overrides that must win over inherited env */
+  envOverrides?: Record<string, string | undefined>
   /** Whether any passthrough tools use deferred loading */
   hasDeferredTools: boolean
   /** SDK session ID for resume (if continuing a session) */
@@ -299,6 +301,7 @@ export function buildQueryOptions(ctx: QueryContext): BuildQueryResult {
         // "--dangerously-skip-permissions cannot be used with root/sudo"
         // See: https://github.com/rynfar/meridian/issues/256
         ...(process.getuid?.() === 0 ? { IS_SANDBOX: "1" } : {}),
+        ...ctx.envOverrides,
       },
       ...(Object.keys(sdkAgents).length > 0 ? { agents: sdkAgents } : {}),
       ...(resumeSessionId ? { resume: resumeSessionId } : {}),

@@ -499,11 +499,20 @@ npm install -g @sourcegraph/amp
 amp login
 ```
 
-Then point Amp at Meridian for subsequent invocations:
+Then point Amp at Meridian for subsequent invocations. **Amp keys credentials by server URL**, so you also need to pass your stored key as `AMP_API_KEY` (the key Amp saved is for `https://ampcode.com`, not the local URL):
 
 ```bash
 export AMP_URL=http://127.0.0.1:3456
+export AMP_API_KEY=$(python3 -c "import json; print(json.load(open(f'{__import__(\"os\").path.expanduser(\"~\")}/.local/share/amp/secrets.json'))['apiKey@https://ampcode.com/'])")
 amp -x "say hi"
+```
+
+Or simpler — read it once and stash in your shell rc:
+
+```bash
+# ~/.zshrc or ~/.bashrc
+export AMP_URL=http://127.0.0.1:3456
+export AMP_API_KEY="sgamp_user_..."   # paste from ~/.local/share/amp/secrets.json
 ```
 
 #### What's free vs. paid

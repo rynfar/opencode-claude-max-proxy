@@ -16,7 +16,7 @@
 
 import type { Context } from "hono"
 import type { AgentAdapter } from "../adapter"
-import { type FileChange } from "../fileChanges"
+import { type FileChange, extractFileChangesFromBash } from "../fileChanges"
 import { normalizeContent } from "../messages"
 import { BLOCKED_BUILTIN_TOOLS, CLAUDE_CODE_ONLY_TOOLS } from "../tools"
 
@@ -86,7 +86,24 @@ export const ampAdapter: AgentAdapter = {
     return false
   },
 
-  extractFileChangesFromToolUse(_toolName: string, _toolInput: unknown): FileChange[] {
+  /**
+   * NOTE: Amp-specific. Maps Amp's snake_case native tool names to file changes.
+   * Amp's writing tools: create_file (new), edit_file (mutate), bash (with redirects).
+   * Path field varies: prefer `path`, fall back to `file_path` / `filePath`.
+   */
+  extractFileChangesFromToolUse(toolName: string, toolInput: unknown): FileChange[] {
+    const input = toolInput as Record<string, unknown> | null | undefined
+    const filePath = input?.path ?? input?.file_path ?? input?.filePath
+
+    if (toolName === "create_file" && filePath) {
+      return [{ operation: "wrote", path: String(filePath) }]
+    }
+    if (toolName === "edit_file" && filePath) {
+      return [{ operation: "edited", path: String(filePath) }]
+    }
+    if (toolName === "bash" && input?.command) {
+      return extractFileChangesFromBash(String(input.command))
+    }
     return []
   },
 }

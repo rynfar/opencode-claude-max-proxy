@@ -23,9 +23,10 @@ let queryCalls: Array<{ model: string; callIndex: number }> = []
 let queryCallCount = 0
 
 // Control what the mock does
-let mockBehavior: "extra_usage_then_succeed" | "always_extra_usage" | "succeed" | "error_assistant_then_ratelimit" = "succeed"
+let mockBehavior: "extra_usage_then_succeed" | "always_extra_usage" | "out_of_extra_usage_then_succeed" | "succeed" | "error_assistant_then_ratelimit" = "succeed"
 
 const EXTRA_USAGE_ERROR = "Claude Code returned an error result: API Error: Extra usage is required for 1M context · enable extra usage at claude.ai/settings/usage, or use --model to switch"
+const OUT_OF_EXTRA_USAGE_ERROR = "Claude Code returned an error result: API Error: 400 You're out of extra usage."
 
 // Pass through the real resolveSdkModelDefaults — mock.module is process-global
 // in Bun, and stubbing it as () => ({}) leaks to proxy-env-stripping.test.ts.
@@ -60,6 +61,10 @@ mock.module("@anthropic-ai/claude-agent-sdk", () => ({
 
       if (mockBehavior === "extra_usage_then_succeed" && callIndex === 1) {
         throw new Error(EXTRA_USAGE_ERROR)
+      }
+
+      if (mockBehavior === "out_of_extra_usage_then_succeed" && callIndex === 1) {
+        throw new Error(OUT_OF_EXTRA_USAGE_ERROR)
       }
 
       // Simulates real SDK behaviour: emits an error assistant event first,
@@ -178,6 +183,22 @@ describe("Extra usage required fallback", () => {
       // After stripping [1m] (if applicable) and retrying, the error
       // should eventually propagate since the base model also fails
       expect(response.status).toBe(500)
+    })
+
+    it("falls back on the short 'out of extra usage' error", async () => {
+      mockBehavior = "out_of_extra_usage_then_succeed"
+      const app = createTestApp()
+
+      const response = await post(app, {
+        model: "sonnet",
+        stream: false,
+        messages: [{ role: "user", content: "hello" }],
+      })
+
+      expect(response.status).toBe(200)
+      expect(queryCalls.length).toBe(2)
+      expect(queryCalls[0]!.model).toBe("sonnet[1m]")
+      expect(queryCalls[1]!.model).toBe("sonnet")
     })
   })
 

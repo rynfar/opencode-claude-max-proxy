@@ -193,6 +193,12 @@ describe("classifyError", () => {
       expect(isExtraUsageRequiredError("extra usage is required for 1m context")).toBe(true)
     })
 
+    it("detects 'out of extra usage' variant", () => {
+      expect(isExtraUsageRequiredError(
+        "Claude Code returned an error result: API Error: 400 You're out of extra usage."
+      )).toBe(true)
+    })
+
     it("returns false for unrelated errors", () => {
       expect(isExtraUsageRequiredError("rate limit exceeded")).toBe(false)
       expect(isExtraUsageRequiredError("authentication failed")).toBe(false)

@@ -17,6 +17,13 @@ export interface ProxyConfig {
   pluginDir?: string
   /** Plugin config file path. Defaults to ~/.config/meridian/plugins.json. */
   pluginConfigPath?: string
+  /**
+   * Install process-level uncaughtException/unhandledRejection handlers that
+   * log and swallow socket-level errors (EPIPE, ECONNRESET, etc.) instead of
+   * crashing the host process. Defaults to false to preserve any handlers a
+   * library consumer has already installed; the bundled CLI passes `true`.
+   */
+  installProcessErrorHandlers?: boolean
 }
 
 export interface ProxyInstance {

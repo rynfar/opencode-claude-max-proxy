@@ -44,7 +44,7 @@ import { LRUMap } from "../utils/lruMap"
 import { telemetryStore, diagnosticLog, createTelemetryRoutes, landingHtml, renderPrometheusMetrics } from "../telemetry"
 import type { RequestMetric } from "../telemetry"
 import { classifyError, extractSdkTermination, formatSdkTermination, isStaleSessionError, isRateLimitError, isExtraUsageRequiredError, isExpiredTokenError } from "./errors"
-import { refreshOAuthToken, ensureFreshToken, startBackgroundRefresh, stopBackgroundRefresh } from "./tokenRefresh"
+import { refreshOAuthToken, ensureFreshToken, startBackgroundRefresh, stopBackgroundRefresh, createPlatformCredentialStore, type CredentialStore } from "./tokenRefresh"
 import { checkPluginConfigured } from "./setup"
 import { mapModelToClaudeModel, resolveClaudeExecutableAsync, resolveSdkModelDefaults, isClosedControllerError, getClaudeAuthStatusAsync, getAuthCacheInfo, getResolvedClaudeExecutableInfo, hasExtendedContext, stripExtendedContext, recordExtendedContextUnavailable } from "./models"
 import type { AnthropicSseEvent } from "./openai"
@@ -57,7 +57,7 @@ import { runTransformHook, buildPipeline, createRequestContext } from "./transfo
 import { getAdapterTransforms } from "./transforms/registry"
 import { loadPlugins, getActiveTransforms } from "./plugins/loader"
 import type { LoadedPlugin } from "./plugins/types"
-import { resolveProfile, listProfiles, setActiveProfile, getActiveProfileId, getEffectiveProfiles, restoreActiveProfile } from "./profiles"
+import { resolveProfile, listProfiles, setActiveProfile, getActiveProfileId, getEffectiveProfiles, restoreActiveProfile, type ResolvedProfile } from "./profiles"
 import { filterBetasForProfile, getBetaPolicyFromEnv } from "./betas"
 import { createFileChangeHook, extractFileChangesFromMessages, formatFileChangeSummary, type FileChange } from "./fileChanges"
 import { detectTokenAnomalies, formatAnomalyAlerts, type TokenSnapshot } from "./tokenHealth"
@@ -94,6 +94,24 @@ export type { LineageResult }
 const exec = promisify(execCallback)
 
 let claudeExecutable = ""
+
+function credentialStoreForProfile(profile: ResolvedProfile): CredentialStore | undefined {
+  if (profile.type !== "claude-max") return undefined
+  return createPlatformCredentialStore(
+    profile.env.CLAUDE_CONFIG_DIR ? { claudeConfigDir: profile.env.CLAUDE_CONFIG_DIR } : undefined
+  )
+}
+
+async function ensureFreshTokenForProfiles(config: ProxyConfig): Promise<void> {
+  const profiles = getEffectiveProfiles(config.profiles)
+  if (profiles.length === 0) return
+
+  for (const profile of profiles) {
+    const resolved = resolveProfile(config.profiles, config.defaultProfile, profile.id)
+    const store = credentialStoreForProfile(resolved)
+    if (store) await ensureFreshToken(store).catch(() => {})
+  }
+}
 
 const MULTIMODAL_TYPES = new Set(["image", "document", "file"])
 
@@ -500,6 +518,7 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
 
         // Overlay profile-specific env vars (e.g. CLAUDE_CONFIG_DIR for multi-account)
         const profileEnv = { ...sdkModelDefaults, ...cleanEnv, ...profile.env }
+        const profileCredentialStore = credentialStoreForProfile(profile)
 
         let systemContext = ""
         if (body.system) {
@@ -980,7 +999,9 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
               // of expiry. Best-effort — the reactive 401 path below picks up
               // anything this misses. Saves a round-trip on the common case
               // where the previous request left the token close to expiry.
-              await ensureFreshToken().catch(() => { /* reactive path handles */ })
+              if (profileCredentialStore) {
+                await ensureFreshToken(profileCredentialStore).catch(() => { /* reactive path handles */ })
+              }
 
               let tokenRefreshed = false
               while (true) {
@@ -1075,7 +1096,9 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
                   // Expired OAuth token: refresh once and retry
                   if (isExpiredTokenError(errMsg) && !tokenRefreshed) {
                     tokenRefreshed = true
-                    const refreshed = await refreshOAuthToken()
+                    const refreshed = profileCredentialStore
+                      ? await refreshOAuthToken(profileCredentialStore)
+                      : false
                     if (refreshed) {
                       claudeLog("token_refresh.retrying", { mode: "non_stream" })
                       console.error(`[PROXY] ${requestMeta.requestId} OAuth token expired — refreshed, retrying`)
@@ -1449,7 +1472,9 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
                 let rateLimitRetries = 0
 
                 // Proactive token refresh — see non-stream path above.
-                await ensureFreshToken().catch(() => { /* reactive path handles */ })
+                if (profileCredentialStore) {
+                  await ensureFreshToken(profileCredentialStore).catch(() => { /* reactive path handles */ })
+                }
 
                 let tokenRefreshed = false
 
@@ -1537,7 +1562,9 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
                     // Expired OAuth token: refresh once and retry
                     if (isExpiredTokenError(errMsg) && !tokenRefreshed) {
                       tokenRefreshed = true
-                      const refreshed = await refreshOAuthToken()
+                      const refreshed = profileCredentialStore
+                        ? await refreshOAuthToken(profileCredentialStore)
+                        : false
                       if (refreshed) {
                         claudeLog("token_refresh.retrying", { mode: "stream" })
                         console.error(`[PROXY] ${requestMeta.requestId} OAuth token expired — refreshed, retrying`)
@@ -2526,13 +2553,19 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
   })
 
   app.post("/auth/refresh", async (c) => {
-    const success = await refreshOAuthToken()
+    const profile = resolveProfile(
+      finalConfig.profiles,
+      finalConfig.defaultProfile,
+      c.req.header("x-meridian-profile") || undefined
+    )
+    const store = credentialStoreForProfile(profile)
+    const success = store ? await refreshOAuthToken(store) : false
     if (success) {
       // Drop the rate-limit snapshot — old quotas were observed under the
       // previous credential and may belong to a different account if the
       // refresh swapped profiles. The next SDK call repopulates.
       rateLimitStore.clear()
-      return c.json({ success: true, message: "OAuth token refreshed successfully" })
+      return c.json({ success: true, message: "OAuth token refreshed successfully", profile: profile.id })
     }
     return c.json(
       { success: false, message: "Token refresh failed. If the problem persists, run 'claude login'." },
@@ -2975,6 +3008,17 @@ export async function startProxyServer(config: Partial<ProxyConfig> = {}): Promi
   // Idempotent — re-calling start() on a hot-reload is a no-op.
   startBackgroundRefresh()
 
+  // Profile-scoped OAuth token refresh: the default scheduler above only
+  // watches the default Claude credential store. Multi-profile credentials
+  // live under each profile's CLAUDE_CONFIG_DIR, so poll the discovered
+  // profile list and refresh any browser-login profile that is near expiry.
+  const PROFILE_TOKEN_REFRESH_MS = 45_000
+  void ensureFreshTokenForProfiles(finalConfig)
+  const profileTokenRefreshInterval = setInterval(() => {
+    void ensureFreshTokenForProfiles(finalConfig)
+  }, PROFILE_TOKEN_REFRESH_MS)
+  if (profileTokenRefreshInterval.unref) profileTokenRefreshInterval.unref()
+
   // Background auth keepalive: periodically refresh auth status for all
   // configured profiles so switching is instant (no stale token delay).
   let authKeepaliveInterval: ReturnType<typeof setInterval> | undefined
@@ -3001,6 +3045,7 @@ export async function startProxyServer(config: Partial<ProxyConfig> = {}): Promi
     server,
     config: finalConfig,
     async close() {
+      clearInterval(profileTokenRefreshInterval)
       if (authKeepaliveInterval) clearInterval(authKeepaliveInterval)
       stopBackgroundRefresh()
       await new Promise<void>((resolve, reject) => {

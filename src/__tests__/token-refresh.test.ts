@@ -229,6 +229,50 @@ describe("refreshOAuthToken", () => {
     expect(fetchCount).toBe(1)
   })
 
+  it("deduplicates distinct store instances with the same refreshKey", async () => {
+    const first = makeStore().store
+    const second = makeStore().store
+    first.refreshKey = "file:/tmp/same-profile/.credentials.json"
+    second.refreshKey = "file:/tmp/same-profile/.credentials.json"
+    let fetchCount = 0
+    mockFetch(mock(async () => {
+      fetchCount++
+      return makeSuccessResponse(MOCK_TOKEN_RESPONSE)
+    }))
+    const { refreshOAuthToken } = await import("../proxy/tokenRefresh")
+
+    const [r1, r2] = await Promise.all([
+      refreshOAuthToken(first),
+      refreshOAuthToken(second),
+    ])
+
+    expect(r1).toBe(true)
+    expect(r2).toBe(true)
+    expect(fetchCount).toBe(1)
+  })
+
+  it("does not share in-flight refreshes across different refreshKeys", async () => {
+    const first = makeStore().store
+    const second = makeStore().store
+    first.refreshKey = "file:/tmp/personal/.credentials.json"
+    second.refreshKey = "file:/tmp/work/.credentials.json"
+    let fetchCount = 0
+    mockFetch(mock(async () => {
+      fetchCount++
+      return makeSuccessResponse(MOCK_TOKEN_RESPONSE)
+    }))
+    const { refreshOAuthToken } = await import("../proxy/tokenRefresh")
+
+    const [r1, r2] = await Promise.all([
+      refreshOAuthToken(first),
+      refreshOAuthToken(second),
+    ])
+
+    expect(r1).toBe(true)
+    expect(r2).toBe(true)
+    expect(fetchCount).toBe(2)
+  })
+
   it("allows a second refresh after the first completes", async () => {
     const { store } = makeStore()
     let fetchCount = 0

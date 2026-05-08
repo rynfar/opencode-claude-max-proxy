@@ -19,11 +19,11 @@ import {
 } from "./helpers"
 
 // Track query calls to verify retry behavior
-let queryCalls: Array<{ model: string; callIndex: number }> = []
+let queryCalls: Array<{ model: string; callIndex: number; resume?: string }> = []
 let queryCallCount = 0
 
 // Control what the mock does
-let mockBehavior: "extra_usage_then_succeed" | "always_extra_usage" | "out_of_extra_usage_then_succeed" | "succeed" | "error_assistant_then_ratelimit" = "succeed"
+let mockBehavior: "extra_usage_then_succeed" | "always_extra_usage" | "out_of_extra_usage_then_succeed" | "resume_extra_usage_then_succeed" | "succeed" | "error_assistant_then_ratelimit" = "succeed"
 
 const EXTRA_USAGE_ERROR = "Claude Code returned an error result: API Error: Extra usage is required for 1M context · enable extra usage at claude.ai/settings/usage, or use --model to switch"
 const OUT_OF_EXTRA_USAGE_ERROR = "Claude Code returned an error result: API Error: 400 You're out of extra usage."
@@ -49,10 +49,10 @@ mock.module("../proxy/models", () => ({
 mock.module("@anthropic-ai/claude-agent-sdk", () => ({
   query: (opts: any) => {
     queryCallCount++
-    const callIndex = queryCallCount
-    const model = opts.options?.model || "sonnet"
-    queryCalls.push({ model, callIndex })
-    const isStreaming = opts.options?.includePartialMessages === true
+      const callIndex = queryCallCount
+      const model = opts.options?.model || "sonnet"
+      queryCalls.push({ model, callIndex, resume: opts.options?.resume })
+      const isStreaming = opts.options?.includePartialMessages === true
 
     return (async function* () {
       if (mockBehavior === "always_extra_usage") {
@@ -64,6 +64,14 @@ mock.module("@anthropic-ai/claude-agent-sdk", () => ({
       }
 
       if (mockBehavior === "out_of_extra_usage_then_succeed" && callIndex === 1) {
+        throw new Error(OUT_OF_EXTRA_USAGE_ERROR)
+      }
+
+      if (
+        mockBehavior === "resume_extra_usage_then_succeed" &&
+        opts.options?.resume === "sdk-session-1" &&
+        (model === "sonnet[1m]" || model === "sonnet")
+      ) {
         throw new Error(OUT_OF_EXTRA_USAGE_ERROR)
       }
 
@@ -234,6 +242,41 @@ describe("Extra usage required fallback", () => {
       const events = parseSSE(text)
       const errorEvent = events.find((e) => e.event === "error")
       expect(errorEvent).toBeDefined()
+    })
+
+    it("retries resumed base model as a fresh session after extra usage", async () => {
+      mockBehavior = "resume_extra_usage_then_succeed"
+      const app = createTestApp()
+
+      await post(app, {
+        model: "sonnet",
+        stream: false,
+        messages: [{ role: "user", content: "hello" }],
+      }, { "x-opencode-session": "sess-1" })
+
+      const response = await post(app, {
+        model: "sonnet",
+        stream: true,
+        messages: [
+          { role: "user", content: "hello" },
+          { role: "assistant", content: [
+            { type: "text", text: "Running task." },
+            { type: "tool_use", id: "toolu_1", name: "write", input: { path: "a.txt" } },
+          ] },
+          { role: "user", content: [
+            { type: "tool_result", tool_use_id: "toolu_1", content: "done" },
+          ] },
+        ],
+      }, { "x-opencode-session": "sess-1" })
+
+      expect(response.status).toBe(200)
+      const text = await response.text()
+      expect(text).toContain("event: message_start")
+      expect(queryCalls.slice(-3)).toEqual([
+        { model: "sonnet[1m]", callIndex: 2, resume: "sdk-session-1" },
+        { model: "sonnet", callIndex: 3, resume: "sdk-session-1" },
+        { model: "sonnet", callIndex: 4, resume: undefined },
+      ])
     })
   })
 

@@ -13,6 +13,8 @@
  */
 
 import { readFileSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { glob } from "glob";
 
 /**
@@ -90,7 +92,7 @@ export async function fixBunExports(distDir) {
   const files = await glob("**/*.js", { cwd: distDir });
   let totalFixed = 0;
   for (const rel of files) {
-    const path = distDir + rel;
+    const path = join(distDir, rel);
     const src = readFileSync(path, "utf-8");
     const out = patchSource(src);
     if (out !== src) {
@@ -103,8 +105,9 @@ export async function fixBunExports(distDir) {
 }
 
 // CLI entry — only runs when invoked directly, not when imported by tests.
-if (import.meta.url === `file://${process.argv[1]}`) {
-  const distDir = new URL("../dist/", import.meta.url).pathname;
+const __filename = fileURLToPath(import.meta.url);
+if (resolve(process.argv[1]) === __filename) {
+  const distDir = resolve(dirname(__filename), "..", "dist");
   const totalFixed = await fixBunExports(distDir);
   if (totalFixed > 0) {
     console.log(`fix-bun-exports: patched ${totalFixed} file(s)`);

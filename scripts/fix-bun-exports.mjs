@@ -110,7 +110,7 @@ export async function fixBunExports(distDir) {
 
 // CLI entry — only runs when invoked directly, not when imported by tests.
 const __filename = fileURLToPath(import.meta.url);
-if (resolve(process.argv[1]) === __filename) {
+if (process.argv[1] && resolve(process.argv[1]) === __filename) {
   const distDir = resolve(dirname(__filename), "..", "dist");
   const totalFixed = await fixBunExports(distDir);
   if (totalFixed > 0) {

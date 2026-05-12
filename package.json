@@ -21,7 +21,7 @@
   "scripts": {
     "start": "./bin/claude-proxy-supervisor.sh",
     "proxy": "./bin/claude-proxy-supervisor.sh",
-    "build": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && bun build bin/cli.ts src/proxy/server.ts --outdir dist --target node --splitting --external @anthropic-ai/claude-agent-sdk --entry-naming [name].js && tsc -p tsconfig.build.json",
+    "build": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && bun build bin/cli.ts src/proxy/server.ts --outdir dist --target node --splitting --external @anthropic-ai/claude-agent-sdk --entry-naming \"[name].js\" && tsc -p tsconfig.build.json",
     "postbuild": "node scripts/fix-bun-exports.mjs && node --check dist/cli.js && node --check dist/server.js && node -e \"if(!require('fs').existsSync('dist/proxy/server.d.ts'))process.exit(1)\"",
     "postinstall": "node ./node_modules/@anthropic-ai/claude-code/install.cjs 2>/dev/null || true",
     "prepublishOnly": "bun run build",

@@ -65,15 +65,19 @@ export function patchSource(src) {
       out = out.replace(blocks[0][0], cleaned);
     }
 
-    // Remove subsequent blocks whose real symbols are all in the canonical set
+    // Deduplicate subsequent blocks against the canonical set
     for (let i = blocks.length - 1; i >= 1; i--) {
       const block = blocks[i][0];
       const symbols = extractExportSymbols(block);
-      if (
-        symbols.length === 0 ||
-        symbols.every((s) => canonicalSymbols.has(s))
-      ) {
+      const novel = symbols.filter((s) => !canonicalSymbols.has(s));
+      if (novel.length === 0) {
         out = out.replace(block, "");
+      } else if (novel.length < symbols.length) {
+        const cleaned = `export { ${novel.join(", ")} };`;
+        out = out.replace(block, cleaned);
+        for (const s of novel) canonicalSymbols.add(s);
+      } else {
+        for (const s of symbols) canonicalSymbols.add(s);
       }
     }
   }

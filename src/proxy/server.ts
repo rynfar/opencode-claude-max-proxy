@@ -2565,6 +2565,8 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
     if (xApiKey) internalHeaders["x-api-key"] = xApiKey
     const authz = c.req.header("authorization")
     if (authz) internalHeaders["authorization"] = authz
+    const xMeridianAgent = c.req.header("x-meridian-agent")
+    if (xMeridianAgent) internalHeaders["x-meridian-agent"] = xMeridianAgent
     const internalReq = new Request("http://internal/v1/messages", {
       method: "POST",
       headers: internalHeaders,

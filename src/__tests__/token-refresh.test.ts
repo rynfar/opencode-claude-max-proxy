@@ -442,6 +442,27 @@ describe("startBackgroundRefresh", () => {
     expect(fetchCalls).toBeGreaterThanOrEqual(2)
   })
 
+  it("does not write scheduled refresh status to stderr by default", async () => {
+    const { startBackgroundRefresh } = await import("../proxy/tokenRefresh")
+    const originalError = console.error
+    const stderr: unknown[][] = []
+    console.error = (...args: unknown[]) => { stderr.push(args) }
+    try {
+      mockFetch(() => Promise.resolve(makeSuccessResponse(MOCK_TOKEN_RESPONSE)))
+      const { store } = makeStore({
+        ...MOCK_CREDENTIALS,
+        claudeAiOauth: { ...MOCK_CREDENTIALS.claudeAiOauth, expiresAt: Date.now() - 1000 },
+      })
+
+      startBackgroundRefresh(store, 1000, 60_000)
+      await tick(50)
+
+      expect(stderr).toHaveLength(0)
+    } finally {
+      console.error = originalError
+    }
+  })
+
   it("is idempotent — second start() while running is a no-op", async () => {
     const { startBackgroundRefresh, isBackgroundRefreshActive } = await import("../proxy/tokenRefresh")
     let fetchCalls = 0

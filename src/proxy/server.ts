@@ -561,6 +561,8 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
 
         const effort = effortHeader
           || body.effort
+          || body.reasoning_effort
+          || body.output_config?.effort
           || undefined
         let thinking: QueryContext['thinking'] | undefined = body.thinking || undefined
         if (thinkingHeader !== undefined) {

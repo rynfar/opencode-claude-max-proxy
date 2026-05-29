@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.43.0](https://github.com/rynfar/meridian/compare/meridian-v1.42.1...meridian-v1.43.0) (2026-05-29)
+
+
+### Features
+
+* support Claude Opus 4.8 ([#521](https://github.com/rynfar/meridian/issues/521)) ([236781d](https://github.com/rynfar/meridian/commit/236781de81aa1a303e9e766c5c1a69207db3571f))
+
+
+### Bug Fixes
+
+* **proxy:** support explicit opus 4.6 and 4.7 pins ([#497](https://github.com/rynfar/meridian/issues/497)) ([597a304](https://github.com/rynfar/meridian/commit/597a3042cbb7435297cab9960c3dccade3e6bd6f))
+
 ## [1.42.1](https://github.com/rynfar/meridian/compare/meridian-v1.42.0...meridian-v1.42.1) (2026-05-06)
 
 

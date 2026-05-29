@@ -1157,34 +1157,39 @@ describe("createSseTranslator", () => {
 
 describe("buildModelList", () => {
   it("returns 4 models", () => {
-    expect(buildModelList(true).length).toBe(4)
-    expect(buildModelList(false).length).toBe(4)
+    expect(buildModelList(true).length).toBe(5)
+    expect(buildModelList(false).length).toBe(5)
   })
 
-  it("includes both opus-4-6 and opus-4-7 for UI pickers", () => {
+  it("includes opus-4-6, opus-4-7, and opus-4-8 for UI pickers", () => {
     const ids = buildModelList(true).map(m => m.id)
     expect(ids).toContain("claude-opus-4-6")
     expect(ids).toContain("claude-opus-4-7")
+    expect(ids).toContain("claude-opus-4-8")
   })
 
-  it("Max subscription gets 1M context for both opus variants, 200k for sonnet", () => {
+  it("Max subscription gets 1M context for all opus variants, 200k for sonnet", () => {
     const models = buildModelList(true)
     const sonnet = models.find(m => m.id === "claude-sonnet-4-6")!
     const opus46 = models.find(m => m.id === "claude-opus-4-6")!
     const opus47 = models.find(m => m.id === "claude-opus-4-7")!
+    const opus48 = models.find(m => m.id === "claude-opus-4-8")!
     expect(sonnet.context_window).toBe(200_000)
     expect(opus46.context_window).toBe(1_000_000)
     expect(opus47.context_window).toBe(1_000_000)
+    expect(opus48.context_window).toBe(1_000_000)
   })
 
-  it("non-Max gets 200k context for sonnet and both opus variants", () => {
+  it("non-Max gets 200k context for sonnet and all opus variants", () => {
     const models = buildModelList(false)
     const sonnet = models.find(m => m.id === "claude-sonnet-4-6")!
     const opus46 = models.find(m => m.id === "claude-opus-4-6")!
     const opus47 = models.find(m => m.id === "claude-opus-4-7")!
+    const opus48 = models.find(m => m.id === "claude-opus-4-8")!
     expect(sonnet.context_window).toBe(200_000)
     expect(opus46.context_window).toBe(200_000)
     expect(opus47.context_window).toBe(200_000)
+    expect(opus48.context_window).toBe(200_000)
   })
 
   it("haiku is always 200k regardless of subscription", () => {

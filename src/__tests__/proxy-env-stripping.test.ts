@@ -215,7 +215,7 @@ describe("SDK model pin injection (fixes #419)", () => {
   it("injects Meridian's canonical model pins when no shell env is set", async () => {
     const app = createTestApp()
     await post(app, BASIC_REQUEST)
-    expect(capturedQueryOptions.env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe("claude-opus-4-7")
+    expect(capturedQueryOptions.env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe("claude-opus-4-8")
     expect(capturedQueryOptions.env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe("claude-sonnet-4-6")
     expect(capturedQueryOptions.env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe("claude-haiku-4-5")
   })
@@ -231,6 +231,13 @@ describe("SDK model pin injection (fixes #419)", () => {
     const app = createTestApp()
     await post(app, { ...BASIC_REQUEST, model: "claude-opus-4-7" })
     expect(capturedQueryOptions.env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe("claude-opus-4-7")
+  })
+
+  it("explicit claude-opus-4-8 requests beat inherited env pins", async () => {
+    process.env.ANTHROPIC_DEFAULT_OPUS_MODEL = "claude-opus-4-7"
+    const app = createTestApp()
+    await post(app, { ...BASIC_REQUEST, model: "claude-opus-4-8" })
+    expect(capturedQueryOptions.env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe("claude-opus-4-8")
   })
 
   it("shell ANTHROPIC_DEFAULT_* values win over Meridian's pins", async () => {

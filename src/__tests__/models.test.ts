@@ -19,6 +19,10 @@ describe("mapModelToClaudeModel", () => {
     expect(mapModelToClaudeModel("opus")).toBe("opus[1m]")
   })
 
+  it("maps opus 4.8 models to opus[1m]", () => {
+    expect(mapModelToClaudeModel("claude-opus-4-8")).toBe("opus[1m]")
+  })
+
   it("maps opus 4.5 models to opus (no 1M)", () => {
     expect(mapModelToClaudeModel("claude-opus-4-5")).toBe("opus")
   })

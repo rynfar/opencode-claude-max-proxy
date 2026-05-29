@@ -39,7 +39,7 @@ export type ClaudeModel = "sonnet" | "sonnet[1m]" | "opus" | "opus[1m]" | "haiku
  * override via MERIDIAN_DEFAULT_{TYPE}_MODEL (proxy-side) or
  * ANTHROPIC_DEFAULT_{TYPE}_MODEL (shell env, wins over Meridian's pin).
  */
-export const CANONICAL_OPUS_MODEL = "claude-opus-4-7"
+export const CANONICAL_OPUS_MODEL = "claude-opus-4-8"
 export const CANONICAL_SONNET_MODEL = "claude-sonnet-4-6"
 export const CANONICAL_HAIKU_MODEL = "claude-haiku-4-5"
 

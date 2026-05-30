@@ -102,13 +102,10 @@ if (args[0] === "refresh-token") {
 const exec = promisify(execCallback)
 const execFile = promisify(execFileCallback)
 
-// Prevent SDK subprocess crashes from killing the proxy
-process.on("uncaughtException", (err) => {
-  console.error(`[PROXY] Uncaught exception (recovered): ${err.message}`)
-})
-process.on("unhandledRejection", (reason) => {
-  console.error(`[PROXY] Unhandled rejection (recovered): ${reason instanceof Error ? reason.message : reason}`)
-})
+// Process error handlers (SDK subprocess crash recovery, socket EPIPE, etc.)
+// are installed by startProxyServer when `installProcessErrorHandlers: true`
+// is passed below. Library consumers can either pass the same flag or call
+// `installProxyProcessErrorHandlers()` directly.
 
 const port = parseInt(process.env.MERIDIAN_PORT ?? process.env.CLAUDE_PROXY_PORT ?? "3456", 10)
 const host = process.env.MERIDIAN_HOST ?? process.env.CLAUDE_PROXY_HOST ?? "127.0.0.1"
@@ -190,7 +187,7 @@ export async function runCli(
     enableDiskProfileDiscovery()
   }
 
-  const proxy = await start({ port, host, idleTimeoutSeconds, profiles, defaultProfile, version })
+  const proxy = await start({ port, host, idleTimeoutSeconds, profiles, defaultProfile, version, installProcessErrorHandlers: true })
 
   // Handle EADDRINUSE — preserve CLI behavior of exiting on port conflict
   proxy.server.on("error", (error: NodeJS.ErrnoException) => {

@@ -2989,10 +2989,38 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
   return { app, config: finalConfig, initPlugins: initPluginsAsync }
 }
 
+/**
+ * Install process-level handlers that log and swallow uncaught exceptions
+ * and unhandled promise rejections instead of crashing the host process.
+ *
+ * Idempotent: safe to call multiple times; only the first invocation attaches
+ * listeners. Exported so library consumers can opt in explicitly without
+ * having to set `installProcessErrorHandlers: true` in `startProxyServer`.
+ */
+let processErrorHandlersInstalled = false
+export function installProxyProcessErrorHandlers(): void {
+  if (processErrorHandlersInstalled) return
+  processErrorHandlersInstalled = true
+  // Prevent SDK subprocess crashes (and downstream socket EPIPE / ECONNRESET
+  // from aborted streaming responses) from killing the proxy. Mirrors the
+  // long-standing behavior of `bin/cli.ts`; lifted here so library consumers
+  // (e.g. era-code's in-process startProxyServer) get the same safety net.
+  process.on("uncaughtException", (err) => {
+    console.error(`[PROXY] Uncaught exception (recovered): ${err.message}`)
+  })
+  process.on("unhandledRejection", (reason) => {
+    console.error(`[PROXY] Unhandled rejection (recovered): ${reason instanceof Error ? reason.message : reason}`)
+  })
+}
+
 export async function startProxyServer(config: Partial<ProxyConfig> = {}): Promise<ProxyInstance> {
   claudeExecutable = await resolveClaudeExecutableAsync()
   const { app, config: finalConfig, initPlugins } = createProxyServer(config)
   if (initPlugins) await initPlugins()
+
+  if (finalConfig.installProcessErrorHandlers) {
+    installProxyProcessErrorHandlers()
+  }
 
   const server = serve({
     fetch: app.fetch,

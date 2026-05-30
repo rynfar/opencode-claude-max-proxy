@@ -412,7 +412,6 @@ async function scheduleNext(
     const ok = await refreshOAuthToken(store)
     if (!scheduledRefreshActive || gen !== scheduledRefreshGeneration) return
     claudeLog("token_refresh.scheduled", { ok, immediate: true })
-    console.error(`[token_refresh] scheduled refresh (immediate) ok=${ok}`)
     armTimer(ok ? 0 : failureRetryMs, store, bufferMs, failureRetryMs, gen)
     return
   }

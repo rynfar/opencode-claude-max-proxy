@@ -50,15 +50,25 @@ describe("patchSource (pure)", () => {
     expect(out).toContain("realThing")
   })
 
-  it("keeps a subsequent export block whose symbols are NOT all in the first", () => {
-    // The first block is the buggy one (smaller). Don't drop the second
-    // just because we picked the wrong canonical — leave both in place
-    // so a human can see the bug rather than us silently masking it.
+  it("rewrites a subsequent block to keep only novel symbols when there is partial overlap", () => {
     const input =
       `export {\n  doStuff\n};\n\nexport {\n  doStuff,\n  realThing\n};\n`
     const out = patchSource(input)
     const matches = out.match(/^export \{/gm) || []
     expect(matches.length).toBe(2)
+    expect(out).toContain("export { realThing };")
+    expect(out).not.toMatch(/export \{[^}]*doStuff[^}]*realThing/)
+  })
+
+  it("deduplicates a partial-overlap block matching bun's tokenRefresh pattern", () => {
+    const input =
+      `export {\n  stopBg,\n  startBg,\n  ensureFresh\n};\n\n` +
+      `export { logCtx, claudeLog, ensureFresh, startBg, stopBg };\n`
+    const out = patchSource(input)
+    const matches = out.match(/^export \{/gm) || []
+    expect(matches.length).toBe(2)
+    expect(out).toContain("export { logCtx, claudeLog };")
+    expect(out).not.toMatch(/export \{[^}]*stopBg[^}]*claudeLog/)
   })
 
   it("collapses 3+ consecutive blank lines to 2", () => {

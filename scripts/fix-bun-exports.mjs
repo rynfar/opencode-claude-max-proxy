@@ -13,6 +13,8 @@
  */
 
 import { readFileSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { glob } from "glob";
 
 /**
@@ -63,15 +65,19 @@ export function patchSource(src) {
       out = out.replace(blocks[0][0], cleaned);
     }
 
-    // Remove subsequent blocks whose real symbols are all in the canonical set
+    // Deduplicate subsequent blocks against the canonical set
     for (let i = blocks.length - 1; i >= 1; i--) {
       const block = blocks[i][0];
       const symbols = extractExportSymbols(block);
-      if (
-        symbols.length === 0 ||
-        symbols.every((s) => canonicalSymbols.has(s))
-      ) {
+      const novel = symbols.filter((s) => !canonicalSymbols.has(s));
+      if (novel.length === 0) {
         out = out.replace(block, "");
+      } else if (novel.length < symbols.length) {
+        const cleaned = `export { ${novel.join(", ")} };`;
+        out = out.replace(block, cleaned);
+        for (const s of novel) canonicalSymbols.add(s);
+      } else {
+        for (const s of symbols) canonicalSymbols.add(s);
       }
     }
   }
@@ -90,7 +96,7 @@ export async function fixBunExports(distDir) {
   const files = await glob("**/*.js", { cwd: distDir });
   let totalFixed = 0;
   for (const rel of files) {
-    const path = distDir + rel;
+    const path = join(distDir, rel);
     const src = readFileSync(path, "utf-8");
     const out = patchSource(src);
     if (out !== src) {
@@ -103,8 +109,9 @@ export async function fixBunExports(distDir) {
 }
 
 // CLI entry — only runs when invoked directly, not when imported by tests.
-if (import.meta.url === `file://${process.argv[1]}`) {
-  const distDir = new URL("../dist/", import.meta.url).pathname;
+const __filename = fileURLToPath(import.meta.url);
+if (process.argv[1] && resolve(process.argv[1]) === __filename) {
+  const distDir = resolve(dirname(__filename), "..", "dist");
   const totalFixed = await fixBunExports(distDir);
   if (totalFixed > 0) {
     console.log(`fix-bun-exports: patched ${totalFixed} file(s)`);

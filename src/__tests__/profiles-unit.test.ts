@@ -332,3 +332,37 @@ describe("dirsToRemoveOnProfileRemove", () => {
     expect(dirs).toEqual([])
   })
 })
+
+describe("profile auth login env", () => {
+  test("sets CLAUDE_CONFIG_DIR without forcing browser behavior by default", async () => {
+    const { buildAuthLoginEnv } = await import("../proxy/profileCli")
+    const env = buildAuthLoginEnv("/tmp/profile", {}, { PATH: "/usr/bin", BROWSER: "open" })
+
+    expect(env.CLAUDE_CONFIG_DIR).toBe("/tmp/profile")
+    expect(env.BROWSER).toBe("open")
+  })
+
+  test("headless OAuth login builds a manual PKCE authorization URL", async () => {
+    const { createManualOAuthSession } = await import("../proxy/profileCli")
+    const session = createManualOAuthSession()
+    const url = new URL(session.authorizeUrl)
+
+    expect(url.origin).toBe("https://claude.com")
+    expect(url.pathname).toBe("/cai/oauth/authorize")
+    expect(url.searchParams.get("code")).toBe("true")
+    expect(url.searchParams.get("client_id")).toBe("9d1c250a-e61b-44d9-88ed-5944d1962f5e")
+    expect(url.searchParams.get("redirect_uri")).toBe("https://platform.claude.com/oauth/code/callback")
+    expect(url.searchParams.get("code_challenge_method")).toBe("S256")
+    expect(url.searchParams.get("code_challenge")).toBeTruthy()
+    expect(session.codeVerifier).toBeTruthy()
+    expect(session.state).toBeTruthy()
+  })
+
+  test("parses pasted authorization code values", async () => {
+    const { parseAuthorizationCodeInput } = await import("../proxy/profileCli")
+
+    expect(parseAuthorizationCodeInput("abc123")).toEqual({ code: "abc123" })
+    expect(parseAuthorizationCodeInput("abc123#state456")).toEqual({ code: "abc123", state: "state456" })
+    expect(parseAuthorizationCodeInput("https://platform.claude.com/oauth/code/callback?code=abc123&state=state456")).toEqual({ code: "abc123", state: "state456" })
+  })
+})

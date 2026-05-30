@@ -239,6 +239,20 @@ meridian profile add work
 
 > **⚠ Important:** Claude's OAuth reuses your browser session. Before adding a second account, sign out of claude.ai and sign into the other account first.
 
+#### Headless / SSH: complete Claude OAuth with a pasted code
+
+When you still want a normal Claude Max browser-login profile but the Meridian host cannot open a browser (SSH, WSL, containers, remote servers), use `--headless`. Meridian prints a Claude OAuth URL, prompts for the returned code, exchanges it with PKCE, and saves the resulting credentials into the profile's isolated `CLAUDE_CONFIG_DIR`:
+
+```bash
+meridian profile add work --headless
+```
+
+Open the printed URL in a browser, sign in to the target Claude account, then paste the returned code at Meridian's `Paste code:` prompt. For an existing browser-login profile:
+
+```bash
+meridian profile login work --headless
+```
+
 #### Headless / CI: register an OAuth token
 
 When a browser isn't available (containers, CI runners, remote shells), generate a long-lived OAuth token with `claude setup-token` and register it as a profile:
@@ -269,11 +283,11 @@ You can also switch profiles from the web UI at `http://127.0.0.1:3456/profiles`
 
 | Command | Description |
 |---------|-------------|
-| `meridian profile add <name>` | Add a profile and authenticate via browser |
+| `meridian profile add <name> [--headless]` | Add a profile and authenticate via Claude OAuth; `--headless` prints a URL, prompts for the returned code, and stores the exchanged credentials |
 | `meridian profile add <name> --oauth-token [TOKEN]` | Add a headless profile from a `claude setup-token` value (prompts when `TOKEN` is omitted) |
 | `meridian profile list` | List profiles and auth status |
 | `meridian profile switch <name>` | Switch the active profile (requires running proxy) |
-| `meridian profile login <name>` | Re-authenticate an expired profile (browser-login profiles only) |
+| `meridian profile login <name> [--headless]` | Re-authenticate an expired profile (browser-login profiles only); `--headless` uses the URL/code flow |
 | `meridian profile remove <name>` | Remove a profile and its credentials |
 
 ### How it works
@@ -734,11 +748,11 @@ export default {
 |---------|-------------|
 | `meridian` | Start the proxy server |
 | `meridian setup` | Configure the OpenCode plugin in `~/.config/opencode/opencode.json` |
-| `meridian profile add <name>` | Add a profile and authenticate via browser |
+| `meridian profile add <name> [--headless]` | Add a profile and authenticate via Claude OAuth; `--headless` prints a URL, prompts for the returned code, and stores the exchanged credentials |
 | `meridian profile add <name> --oauth-token [TOKEN]` | Add a headless profile from a `claude setup-token` value (prompts when `TOKEN` is omitted) |
 | `meridian profile list` | List all profiles and their auth status |
 | `meridian profile switch <name>` | Switch the active profile (requires running proxy) |
-| `meridian profile login <name>` | Re-authenticate an expired profile (browser-login profiles only) |
+| `meridian profile login <name> [--headless]` | Re-authenticate an expired profile (browser-login profiles only); `--headless` uses the URL/code flow |
 | `meridian profile remove <name>` | Remove a profile and its credentials |
 | `meridian refresh-token` | Manually refresh the Claude OAuth token (exits 0/1) |
 

@@ -47,20 +47,21 @@ if (args[0] === "profile") {
   const { profileAdd, profileAddOauthToken, profileList, profileRemove, profileSwitch, profileLogin, profileHelp } = await import("../src/proxy/profileCli")
   const subcommand = args[1]
   const profileId = args[2]
+  const headless = args.includes("--headless")
 
   if (subcommand === "add" && profileId) {
     const oauthFlagIdx = args.indexOf("--oauth-token", 3)
     if (oauthFlagIdx >= 0) {
       const tokenArg = args[oauthFlagIdx + 1]
-      await profileAddOauthToken(profileId, tokenArg)
+      await profileAddOauthToken(profileId, tokenArg?.startsWith("--") ? undefined : tokenArg)
     } else {
-      profileAdd(profileId)
+      await profileAdd(profileId, { headless })
     }
   }
   else if (subcommand === "list" || subcommand === "ls") profileList()
   else if (subcommand === "remove" && profileId) profileRemove(profileId)
   else if (subcommand === "switch" && profileId) await profileSwitch(profileId)
-  else if (subcommand === "login" && profileId) profileLogin(profileId)
+  else if (subcommand === "login" && profileId) await profileLogin(profileId, { headless })
   else profileHelp()
   process.exit(0)
 }

@@ -1,9 +1,16 @@
 /**
  * SDK Features settings page — per-adapter toggle UI.
  * Same dark theme as the telemetry dashboard. No framework, no CDN.
+ *
+ * The list of adapters rendered here is interpolated from
+ * `proxy/adapters/detect.ADAPTER_LABELS` so adding an adapter to
+ * `ADAPTER_MAP` automatically surfaces its toggles in the UI. Previously
+ * this file held a hardcoded list that drifted (the `claude-code` adapter
+ * was registered for detection but never rendered its config here).
  */
 
 import { profileBarCss, profileBarHtml, profileBarJs, themeCss } from "./profileBar"
+import { ADAPTER_LABELS as ADAPTER_LABELS_SOURCE } from "../proxy/adapters/detect"
 
 export const settingsPageHtml = `<!DOCTYPE html>
 <html lang="en">
@@ -126,14 +133,7 @@ const FEATURES = [
   { key: 'additionalDirectories', label: 'Additional Directories', desc: 'Comma-separated extra paths Claude can access (monorepo libs, etc.)', type: 'text' },
 ];
 
-const ADAPTER_LABELS = {
-  opencode: 'OpenCode',
-  crush: 'Crush',
-  forgecode: 'ForgeCode',
-  pi: 'Pi',
-  droid: 'Droid',
-  passthrough: 'LiteLLM / Passthrough',
-};
+const ADAPTER_LABELS = ${JSON.stringify(ADAPTER_LABELS_SOURCE)};
 
 let currentConfig = {};
 

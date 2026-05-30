@@ -130,12 +130,17 @@ export function getFeaturesForAdapter(adapterName: string): AdapterFeatures {
 }
 
 /**
- * Get the full config for all adapters (for the settings UI).
+ * Get the full config for all adapters (for the settings UI). Sources its
+ * adapter list from `ADAPTER_NAMES` so adding an entry in
+ * `adapters/detect.ts` automatically surfaces here. Previously a hardcoded
+ * list that drifted — `claude-code` was added to `ADAPTER_MAP` but never
+ * here, so its feature toggles had no UI representation.
  */
 export function getAllFeatureConfigs(): Record<string, AdapterFeatures> {
-  const adapters = ["opencode", "crush", "forgecode", "pi", "droid", "passthrough"]
+  // Lazy require — avoids any chance of import cycle on the leaf module path.
+  const { ADAPTER_NAMES } = require("./adapters/detect") as typeof import("./adapters/detect")
   const result: Record<string, AdapterFeatures> = {}
-  for (const name of adapters) {
+  for (const name of ADAPTER_NAMES) {
     result[name] = getFeaturesForAdapter(name)
   }
   return result

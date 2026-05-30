@@ -14,8 +14,9 @@ import { passthroughAdapter } from "./passthrough"
 import { piAdapter } from "./pi"
 import { forgeCodeAdapter } from "./forgecode"
 import { claudeCodeAdapter } from "./claudecode"
+import { cherryStudioAdapter } from "./cherrystudio"
 
-const ADAPTER_MAP: Record<string, AgentAdapter> = {
+export const ADAPTER_MAP: Record<string, AgentAdapter> = {
   opencode: openCodeAdapter,
   droid: droidAdapter,
   crush: crushAdapter,
@@ -24,7 +25,33 @@ const ADAPTER_MAP: Record<string, AgentAdapter> = {
   forgecode: forgeCodeAdapter,
   "claude-code": claudeCodeAdapter,
   claudecode: claudeCodeAdapter,
+  "cherry-studio": cherryStudioAdapter,
+  cherrystudio: cherryStudioAdapter,
 }
+
+/**
+ * Canonical adapter names with their human-readable labels. The settings UI
+ * and per-adapter config code consume this so adding an adapter to
+ * ADAPTER_MAP automatically wires it everywhere — no hardcoded lists in
+ * sdkFeatures.ts or settingsPage.ts to drift out of sync.
+ *
+ * Aliases (e.g. `claudecode` → `claude-code`, `cherrystudio` → `cherry-studio`)
+ * exist in ADAPTER_MAP for detection convenience but are intentionally absent
+ * here: each adapter has exactly one canonical name in the UI.
+ */
+export const ADAPTER_LABELS: Record<string, string> = {
+  opencode: "OpenCode",
+  crush: "Crush",
+  forgecode: "ForgeCode",
+  pi: "Pi",
+  droid: "Droid",
+  passthrough: "LiteLLM / Passthrough",
+  "claude-code": "Claude Code",
+  "cherry-studio": "Cherry Studio",
+}
+
+/** Canonical adapter names — keys of ADAPTER_LABELS, in stable UI order. */
+export const ADAPTER_NAMES: readonly string[] = Object.keys(ADAPTER_LABELS)
 
 const envDefault = process.env.MERIDIAN_DEFAULT_AGENT || ""
 if (envDefault && !ADAPTER_MAP[envDefault]) {
@@ -53,6 +80,7 @@ function isLiteLLMRequest(c: Context): boolean {
  *
  * Detection rules (evaluated in order):
  * 1. x-meridian-agent header               → explicit adapter override
+ *      e.g. "cherry-studio", "claude-code", "opencode", etc.
  * 2. x-opencode-session or x-session-affinity header → OpenCode adapter
  * 3. User-Agent starts with "opencode/"     → OpenCode adapter
  * 4. User-Agent starts with "factory-cli/"  → Droid adapter
@@ -60,6 +88,11 @@ function isLiteLLMRequest(c: Context): boolean {
  * 6. User-Agent starts with "claude-cli/"  → Claude Code adapter
  * 7. litellm/* UA or x-litellm-* headers   → LiteLLM passthrough adapter
  * 8. Default                                → MERIDIAN_DEFAULT_AGENT env var, or OpenCode
+ *
+ * Cherry Studio (and other chat clients with no stable User-Agent) must use
+ * the explicit `x-meridian-agent: cherry-studio` header or set
+ * MERIDIAN_DEFAULT_AGENT — there is no auto-detection rule, by design.
+ * See cherrystudio.ts for the chat-client adapter shape.
  */
 export function detectAdapter(c: Context): AgentAdapter {
   const agentOverride = c.req.header("x-meridian-agent")?.toLowerCase()

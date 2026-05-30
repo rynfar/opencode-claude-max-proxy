@@ -537,6 +537,30 @@ Requests flow through the Claude Code adapter which:
 - Leaves the SDK subprocess cwd on the proxy host (Claude Code's local paths don't exist there).
 - Runs in passthrough mode by default — Claude Code executes its own tools on the machine it runs on; Meridian just forwards tool_use blocks.
 
+### Cherry Studio
+
+[Cherry Studio](https://github.com/CherryHQ/cherry-studio) is a desktop chat client (Electron) that talks to any Anthropic-compatible endpoint. It's the first **chat-client** adapter in Meridian — the existing adapters (OpenCode, Crush, Pi, ForgeCode, Claude Code, Droid) are all CLI coding agents with their own MCP tool runtimes, but Cherry Studio is a pure chat UI that wants Claude's server-side tools (especially `WebSearch` and `WebFetch`) to work natively.
+
+In Cherry Studio's provider settings, add a new Anthropic-compatible provider:
+
+- **API URL:** `http://127.0.0.1:3456`
+- **API Key:** any string when `MERIDIAN_API_KEY` is unset, or your key value otherwise
+- **Custom request headers:** `x-meridian-agent: cherry-studio`
+
+Cherry Studio doesn't send a stable User-Agent ([CherryHQ#10209](https://github.com/CherryHQ/cherry-studio/issues/10209)) so the header is required for the adapter to fire — without it, requests fall through to whatever `MERIDIAN_DEFAULT_AGENT` is (default OpenCode), which blocks `WebSearch`/`WebFetch` in favor of OpenCode's MCP equivalents and breaks Cherry Studio's web search.
+
+If Cherry Studio is the *only* tool pointing at this Meridian instance, you can skip the header and set the env var instead:
+
+```bash
+MERIDIAN_DEFAULT_AGENT=cherry-studio meridian
+```
+
+The Cherry Studio adapter:
+- **Allows** `WebSearch` and `WebFetch` (the whole point — chat clients have no MCP equivalent and need Claude's built-in web access).
+- **Blocks** filesystem and shell tools by default (`Read`, `Write`, `Edit`, `Bash`, `Glob`, `Grep`). A chat-style LLM shouldn't enumerate files on the proxy host unsupervised, even on localhost. If you want broader access, point at a coding-agent adapter where tool calls are surveilled by the calling tool.
+- Runs the SDK's tools internally (no passthrough) so results land inline in the assistant turn — exactly what a chat UI wants to render.
+- Supports `thinking` / `thinkingPassthrough` toggles via the settings UI at `/settings`, same as the coding-agent adapters.
+
 ### Any Anthropic-compatible tool
 
 ```bash

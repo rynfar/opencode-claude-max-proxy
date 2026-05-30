@@ -5,7 +5,7 @@ on:
     branches:
       - main
     tags:
-      - "v*"
+      - "meridian-v*"
   pull_request:
     branches:
       - main
@@ -41,8 +41,8 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{version}},prefix=meridian-v
+            type=semver,pattern={{major}}.{{minor}},prefix=meridian-v
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push

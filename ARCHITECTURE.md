@@ -40,7 +40,10 @@ src/
 │   ├── adapter.ts             ← AgentAdapter interface (extensibility point for multi-agent support)
 │   ├── adapters/
 │   │   ├── opencode.ts        ← OpenCode adapter (session headers, CWD extraction, tool config)
-│   │   └── forgecode.ts       ← ForgeCode adapter (fingerprint sessions, XML CWD, passthrough)
+│   │   ├── forgecode.ts       ← ForgeCode adapter (fingerprint sessions, XML CWD, passthrough)
+│   │   └── amp.ts             ← Amp adapter (snake_case native tools, x-amp-thread-id session, passthrough)
+│   ├── passthrough/
+│   │   └── ampForwarder.ts    ← Amp selective HTTP forward proxy (non-inference traffic → AMP_UPSTREAM_URL)
 │   ├── query.ts               ← SDK query options builder (shared between stream/non-stream paths)
 │   ├── errors.ts              ← Error classification (SDK errors → HTTP responses)
 │   ├── models.ts              ← Model mapping, Claude executable resolution

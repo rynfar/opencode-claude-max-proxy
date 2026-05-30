@@ -14,6 +14,7 @@ import { passthroughAdapter } from "./passthrough"
 import { piAdapter } from "./pi"
 import { forgeCodeAdapter } from "./forgecode"
 import { claudeCodeAdapter } from "./claudecode"
+import { ampAdapter } from "./amp"
 
 const ADAPTER_MAP: Record<string, AgentAdapter> = {
   opencode: openCodeAdapter,
@@ -24,6 +25,7 @@ const ADAPTER_MAP: Record<string, AgentAdapter> = {
   forgecode: forgeCodeAdapter,
   "claude-code": claudeCodeAdapter,
   claudecode: claudeCodeAdapter,
+  amp: ampAdapter,
 }
 
 const envDefault = process.env.MERIDIAN_DEFAULT_AGENT || ""
@@ -65,6 +67,22 @@ export function detectAdapter(c: Context): AgentAdapter {
   const agentOverride = c.req.header("x-meridian-agent")?.toLowerCase()
   if (agentOverride && ADAPTER_MAP[agentOverride]) {
     return ADAPTER_MAP[agentOverride]!
+  }
+
+  // Amp: path-prefix or any x-amp-* header
+  // Both inference (/api/provider/anthropic/) and forwarder paths (/api/thread-actors,
+  // /api/attachments, /api/telemetry, /api/internal/*) belong to Amp. Detect by:
+  //   1. /api/provider/anthropic prefix (inference path), OR
+  //   2. presence of any x-amp-* header (forwarder path or alternative routing)
+  const reqPath = c.req.path || ""
+  if (reqPath.startsWith("/api/provider/anthropic")) {
+    return ampAdapter
+  }
+  const allHeaders = c.req.header() || {}
+  for (const k of Object.keys(allHeaders)) {
+    if (k.toLowerCase().startsWith("x-amp-")) {
+      return ampAdapter
+    }
   }
 
   // OpenCode: plugin injects x-opencode-session; newer versions use x-session-affinity

@@ -411,3 +411,67 @@ describe("detectAdapter — adapter contracts", () => {
     expect(adapter.usesPassthrough).toBeUndefined()
   })
 })
+
+describe("detectAdapter — Amp", () => {
+  function makeCtx(overrides: { path?: string; headers?: Record<string, string> } = {}): any {
+    const headers = overrides.headers ?? {}
+    return {
+      req: {
+        path: overrides.path ?? "/v1/messages",
+        header: (name?: string) => {
+          if (name === undefined) return headers
+          return headers[name.toLowerCase()] ?? headers[name]
+        },
+      },
+    }
+  }
+
+  it("path /api/provider/anthropic/v1/messages → amp", () => {
+    const { detectAdapter } = require("../proxy/adapters/detect")
+    const adapter = detectAdapter(makeCtx({ path: "/api/provider/anthropic/v1/messages" }))
+    expect(adapter.name).toBe("amp")
+  })
+
+  it("path /api/provider/anthropic/v1/messages/count_tokens → amp", () => {
+    const { detectAdapter } = require("../proxy/adapters/detect")
+    const adapter = detectAdapter(makeCtx({ path: "/api/provider/anthropic/v1/messages/count_tokens" }))
+    expect(adapter.name).toBe("amp")
+  })
+
+  it("x-amp-client-type header alone → amp", () => {
+    const { detectAdapter } = require("../proxy/adapters/detect")
+    const adapter = detectAdapter(makeCtx({ headers: { "x-amp-client-type": "cli" } }))
+    expect(adapter.name).toBe("amp")
+  })
+
+  it("x-amp-client-application header alone → amp", () => {
+    const { detectAdapter } = require("../proxy/adapters/detect")
+    const adapter = detectAdapter(makeCtx({ headers: { "x-amp-client-application": "amp-cli" } }))
+    expect(adapter.name).toBe("amp")
+  })
+
+  it("/api/thread-actors path with x-amp-client-type → amp", () => {
+    const { detectAdapter } = require("../proxy/adapters/detect")
+    const adapter = detectAdapter(makeCtx({
+      path: "/api/thread-actors",
+      headers: { "x-amp-client-type": "cli" },
+    }))
+    expect(adapter.name).toBe("amp")
+  })
+
+  it("OpenCode session header still wins when no Amp signals", () => {
+    const { detectAdapter } = require("../proxy/adapters/detect")
+    const adapter = detectAdapter(makeCtx({
+      headers: { "x-opencode-session": "sess-1" },
+    }))
+    expect(adapter.name).toBe("opencode")
+  })
+
+  it("explicit x-meridian-agent: amp wins", () => {
+    const { detectAdapter } = require("../proxy/adapters/detect")
+    const adapter = detectAdapter(makeCtx({
+      headers: { "x-meridian-agent": "amp" },
+    }))
+    expect(adapter.name).toBe("amp")
+  })
+})

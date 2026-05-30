@@ -488,6 +488,90 @@ MERIDIAN_DEFAULT_AGENT=forgecode meridian
 
 ForgeCode uses reqwest's default User-Agent, so automatic detection isn't possible. The `MERIDIAN_DEFAULT_AGENT` env var tells Meridian to use the ForgeCode adapter for all unrecognized requests. If you run other agents alongside ForgeCode, use the `x-meridian-agent: forgecode` header instead (add `[providers.headers]` to your `.forge.toml`).
 
+### Amp (Sourcegraph)
+
+[Amp](https://ampcode.com) is Sourcegraph's coding agent (npm: `@sourcegraph/amp`). Meridian's Amp adapter uses **selective passthrough**: Claude inference (Amp's `smart` mode) routes through your Claude Max subscription, while every other Amp endpoint (threads sync, attachments, telemetry, login, usage, web UI, code review) is forwarded transparently to `https://ampcode.com` so the entire Amp app keeps working.
+
+**Step 1 — install Amp and log in against `ampcode.com` once** to acquire your API key:
+
+```bash
+npm install -g @sourcegraph/amp
+amp login
+```
+
+**Step 2 — wire Amp to Meridian.** Amp keys credentials by server URL, so we tell it the new URL via its settings file *and* register the same key under that URL in its secrets store. After this, plain `amp` works — no env vars needed.
+
+```bash
+# Point Amp's CLI at Meridian
+mkdir -p ~/.config/amp
+cat > ~/.config/amp/settings.json <<'EOF'
+{
+  "amp.url": "http://127.0.0.1:3456"
+}
+EOF
+
+# Register your existing key under the local URL.
+# (Amp stores secrets keyed by URL verbatim — note: no trailing slash here, must
+#  match the value in settings.json exactly.)
+python3 - <<'PY'
+import json, os
+p = os.path.expanduser("~/.local/share/amp/secrets.json")
+d = json.load(open(p))
+d["apiKey@http://127.0.0.1:3456"] = d["apiKey@https://ampcode.com/"]
+json.dump(d, open(p, "w"), indent=2)
+PY
+chmod 600 ~/.local/share/amp/secrets.json
+```
+
+That's it. Now just run `amp` like normal:
+
+```bash
+amp                  # interactive
+amp -x "say hi"      # headless
+amp threads list
+```
+
+If you'd rather use env vars instead of editing config files (e.g., for one-off runs against a different Meridian port), this also works:
+
+```bash
+export AMP_URL=http://127.0.0.1:3456
+export AMP_API_KEY=$(python3 -c "import json,os; print(json.load(open(f'{os.path.expanduser(\"~\")}/.local/share/amp/secrets.json'))['apiKey@https://ampcode.com/'])")
+amp -x "say hi"
+```
+
+#### Billing — what's free, what isn't
+
+**Default usage is free.** Amp defaults to `smart` mode, which uses Claude. Through Meridian that maps directly onto your Claude Max subscription — no charge, no token billing, no Sourcegraph credit consumption.
+
+You only pay Sourcegraph when you **explicitly opt into a non-Claude mode**, which uses a different upstream provider Meridian can't intercept:
+
+| Command | Routed through | Who pays |
+|---|---|---|
+| `amp` (interactive) | Meridian → Claude Max | **Free** (your Max sub) |
+| `amp -x "..."` | Meridian → Claude Max | **Free** |
+| `amp --mode deep ...` | Forwarder → ampcode.com (GPT-5.5) | Sourcegraph (paid Amp tier required) |
+| `amp --mode large ...` / `--mode rush ...` | Forwarder → ampcode.com | Sourcegraph (paid Amp tier required) |
+| `amp threads list / share / search / ...` | Forwarder → ampcode.com | Free (no inference) |
+| `amp skill list / tools list / mcp list / ...` | Local | Free |
+| `amp usage` | Forwarder → ampcode.com | Free (just reads your account) |
+
+Meridian never originates a charge. It only intercepts Anthropic/Claude requests; non-Claude providers pass through unchanged so Sourcegraph bills exactly as it would have if you weren't using Meridian. Free-tier Amp users hit Sourcegraph's existing 402 paywall on `amp -x` with non-Claude modes; that's Sourcegraph's gate, not ours.
+
+#### Configuration
+
+| Env var | Default | Purpose |
+|---|---|---|
+| `AMP_UPSTREAM_URL` | `https://ampcode.com` | Where to forward non-inference traffic |
+| `MERIDIAN_AMP_FORWARD_DISABLED` | unset | Set to `true` to disable forwarding entirely (only inference works; threads/sync/etc. break) |
+
+#### Known limitations
+
+- **One-time `amp login` against real `ampcode.com`** is required to acquire `AMP_API_KEY`. The login flow itself can't be completed through Meridian (the OAuth callback needs Sourcegraph's real login page).
+- **Amp keys credentials by server URL.** Your stored key is registered for `https://ampcode.com`, not `http://127.0.0.1:3456`. The setup above writes a second entry under the local URL (no trailing slash — must match `amp.url` exactly) so plain `amp` works without env vars.
+- **Non-Claude modes still bill against your Sourcegraph account.** `amp --mode deep/large/rush` use providers Meridian can't intercept; the forwarder passes those requests through to `ampcode.com` and Sourcegraph charges normally. See "Billing" above for the full breakdown.
+- **Live thread sync via WebSockets** (multi-device updates without polling) goes through the catch-all forwarder; HTTP routes are verified, but the WS upgrade path hasn't been live-tested. Polling-based `amp threads list` works fine.
+- **Multimodal (image attachments) not yet live-verified.** Should work since Amp uses Claude's standard image format, but no end-to-end confirmation in this release.
+
 ### Pi
 
 Pi uses the `@mariozechner/pi-ai` library which supports a configurable `baseUrl` on the model. Add a provider-level override in `~/.pi/agent/models.json`:
@@ -557,6 +641,7 @@ export ANTHROPIC_BASE_URL=http://127.0.0.1:3456
 | [Open WebUI](https://github.com/open-webui/open-webui) | ✅ Verified | OpenAI-compatible endpoints — set base URL to `http://127.0.0.1:3456` |
 | [Pi](https://github.com/mariozechner/pi-coding-agent) | ✅ Verified | models.json config (see above) — requires `MERIDIAN_DEFAULT_AGENT=pi` |
 | [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | ✅ Verified | `ANTHROPIC_BASE_URL` — remote clients share a Max subscription over the network; client CWD preserved in system prompt |
+| [Amp (Sourcegraph)](https://ampcode.com) | ✅ Verified | `AMP_URL` — selective passthrough (Claude inference free; threads/attachments/telemetry forwarded to ampcode.com) |
 | [Continue](https://github.com/continuedev/continue) | 🔲 Untested | OpenAI-compatible endpoints should work — set `apiBase` to `http://127.0.0.1:3456` |
 
 Tested an agent or built a plugin? [Open an issue](https://github.com/rynfar/meridian/issues) and we'll add it.
@@ -568,13 +653,16 @@ src/proxy/
 ├── server.ts              ← HTTP orchestration (routes, SSE streaming, concurrency)
 ├── adapter.ts             ← AgentAdapter interface
 ├── adapters/
-│   ├── detect.ts          ← Agent detection from request headers
+│   ├── detect.ts          ← Agent detection from request headers / paths
 │   ├── opencode.ts        ← OpenCode adapter
 │   ├── forgecode.ts       ← ForgeCode adapter
 │   ├── crush.ts           ← Crush adapter
 │   ├── droid.ts           ← Droid adapter
 │   ├── pi.ts              ← Pi adapter
+│   ├── amp.ts             ← Amp adapter (snake_case tools, x-amp-thread-id)
 │   └── passthrough.ts     ← LiteLLM passthrough adapter
+├── passthrough/
+│   └── ampForwarder.ts    ← Selective HTTP forward proxy → AMP_UPSTREAM_URL
 ├── query.ts               ← SDK query options builder
 ├── errors.ts              ← Error classification
 ├── models.ts              ← Model mapping (sonnet/opus/haiku, agentMode)

@@ -52,6 +52,7 @@ import { translateOpenAiToAnthropic, translateAnthropicToOpenAi, buildModelList,
 import { extractAdvisorModel, getLastUserMessage, stripAdvisorTools } from "./messages"
 import { requireAuth, authEnabled } from "./auth"
 import { detectAdapter } from "./adapters/detect"
+import { ampForwardRequest } from "./passthrough/ampForwarder"
 import { buildQueryOptions, type QueryContext } from "./query"
 import { runTransformHook, buildPipeline, createRequestContext } from "./transform"
 import { getAdapterTransforms } from "./transforms/registry"
@@ -2389,6 +2390,21 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
 
   app.post("/v1/messages", (c) => handleWithQueue(c, "/v1/messages"))
   app.post("/messages", (c) => handleWithQueue(c, "/messages"))
+
+  // Amp inference alias: same handler, different mount point.
+  // Amp's Anthropic SDK client posts to ${AMP_URL}/api/provider/anthropic/v1/messages.
+  app.post("/api/provider/anthropic/v1/messages", (c) =>
+    handleWithQueue(c, "/api/provider/anthropic/v1/messages"))
+  app.post("/api/provider/anthropic/v1/messages/count_tokens", (c) =>
+    handleWithQueue(c, "/api/provider/anthropic/v1/messages/count_tokens"))
+
+  // Amp forwarder: catch-all for non-inference Amp endpoints
+  // (threads, attachments, telemetry, internal config, other-provider routes).
+  // Detection is handled inside the forwarder via path/header inspection in
+  // detectAdapter calls upstream of this; the route only fires for unmounted
+  // /api/* paths, so the inference aliases above take precedence.
+  app.all("/api/*", async (c) => ampForwardRequest(c))
+  app.all("/.api/*", async (c) => ampForwardRequest(c))
 
   // Telemetry dashboard and API
   app.route("/telemetry", createTelemetryRoutes())

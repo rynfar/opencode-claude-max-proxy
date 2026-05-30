@@ -14,12 +14,12 @@
  * issuing a second network request and racing on the write.
  */
 
-import { execFile as execFileCb } from "child_process"
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs"
-import { homedir, platform, userInfo } from "os"
-import { join, dirname, resolve } from "path"
-import { createHash } from "crypto"
-import { promisify } from "util"
+import { execFile as execFileCb } from "node:child_process"
+import { createHash } from "node:crypto"
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import { homedir, platform, userInfo } from "node:os"
+import { dirname, join, resolve } from "node:path"
+import { promisify } from "node:util"
 import { claudeLog } from "../logger"
 
 const execFile = promisify(execFileCb)
@@ -70,6 +70,8 @@ interface CredentialsFile {
 // ---------------------------------------------------------------------------
 
 export interface CredentialStore {
+  /** Stable identity for in-flight refresh deduplication across store instances. */
+  refreshKey?: string
   read(): Promise<CredentialsFile | null>
   write(credentials: CredentialsFile): Promise<boolean>
 }
@@ -117,6 +119,8 @@ const keychainWasHexByService = new Map<string, boolean>()
 
 function buildMacosStore(serviceName: string): CredentialStore {
   return {
+    refreshKey: `keychain:${serviceName}`,
+
     async read() {
       try {
         const { stdout } = await execFile(
@@ -161,13 +165,16 @@ const macosStore: CredentialStore = buildMacosStore(KEYCHAIN_SERVICE)
 // ---------------------------------------------------------------------------
 
 function buildFileStore(filePath: string): CredentialStore {
+  const absPath = resolve(filePath)
   return {
+    refreshKey: `file:${absPath}`,
+
     async read() {
       try {
-        if (!existsSync(filePath)) return null
-        return JSON.parse(readFileSync(filePath, "utf-8")) as CredentialsFile
+        if (!existsSync(absPath)) return null
+        return JSON.parse(readFileSync(absPath, "utf-8")) as CredentialsFile
       } catch (err) {
-        claudeLog("token_refresh.file_read_failed", { path: filePath, error: String(err) })
+        claudeLog("token_refresh.file_read_failed", { path: absPath, error: String(err) })
         return null
       }
     },
@@ -175,11 +182,11 @@ function buildFileStore(filePath: string): CredentialStore {
     async write(credentials) {
       try {
         // Ensure parent dir exists for non-default paths.
-        mkdirSync(dirname(filePath), { recursive: true })
-        writeFileSync(filePath, serializeCredentials(credentials), "utf-8")
+        mkdirSync(dirname(absPath), { recursive: true })
+        writeFileSync(absPath, serializeCredentials(credentials), "utf-8")
         return true
       } catch (err) {
-        claudeLog("token_refresh.file_write_failed", { path: filePath, error: String(err) })
+        claudeLog("token_refresh.file_write_failed", { path: absPath, error: String(err) })
         return false
       }
     },
@@ -216,8 +223,9 @@ export function credentialsFilePathForProfile(claudeConfigDir?: string): string 
 // OAuth refresh
 // ---------------------------------------------------------------------------
 
-/** In-flight refresh promise — deduplicates concurrent callers. */
-let inflightRefresh: Promise<boolean> | null = null
+/** In-flight refresh promises — deduplicates concurrent callers per credential store. */
+const inflightRefreshByKey = new Map<string, Promise<boolean>>()
+const inflightRefreshByStore = new WeakMap<CredentialStore, Promise<boolean>>()
 
 /**
  * Refresh the Claude Code OAuth access token.
@@ -231,13 +239,27 @@ let inflightRefresh: Promise<boolean> | null = null
  * @param store  Override the credential store (for testing).
  */
 export async function refreshOAuthToken(store?: CredentialStore): Promise<boolean> {
-  if (inflightRefresh) return inflightRefresh
+  const s = store ?? createPlatformCredentialStore()
+  const refreshKey = s.refreshKey
+  if (refreshKey) {
+    const inflight = inflightRefreshByKey.get(refreshKey)
+    if (inflight) return inflight
 
-  inflightRefresh = doRefresh(store ?? createPlatformCredentialStore()).finally(() => {
-    inflightRefresh = null
+    const refresh = doRefresh(s).finally(() => {
+      inflightRefreshByKey.delete(refreshKey)
+    })
+    inflightRefreshByKey.set(refreshKey, refresh)
+    return refresh
+  }
+
+  const inflight = inflightRefreshByStore.get(s)
+  if (inflight) return inflight
+
+  const refresh = doRefresh(s).finally(() => {
+    inflightRefreshByStore.delete(s)
   })
-
-  return inflightRefresh
+  inflightRefreshByStore.set(s, refresh)
+  return refresh
 }
 
 async function doRefresh(store: CredentialStore): Promise<boolean> {
@@ -447,5 +469,5 @@ export function isBackgroundRefreshActive(): boolean {
 
 /** Reset in-flight state — for testing only. */
 export function resetInflightRefresh(): void {
-  inflightRefresh = null
+  inflightRefreshByKey.clear()
 }

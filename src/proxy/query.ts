@@ -8,6 +8,7 @@
 import { join } from "node:path"
 import type { Options, SdkBeta, SettingSource } from "@anthropic-ai/claude-agent-sdk"
 import { createOpencodeMcpServer } from "../mcpTools"
+import { envBool } from "../env"
 import { createPassthroughMcpServer, PASSTHROUGH_MCP_NAME } from "./passthroughTools"
 
 /**
@@ -294,7 +295,14 @@ export function buildQueryOptions(ctx: QueryContext): BuildQueryResult {
         // the "share memory with Claude Code" intent without poisoning
         // Keychain auth.
         ...(sharedMemory ? stripConfigDir(cleanEnv) : cleanEnv),
-        ENABLE_TOOL_SEARCH: hasDeferredTools ? "true" : "false",
+        // MERIDIAN_FORCE_TOOL_SEARCH=1 forces the SDK's deferred tool loading
+        // on regardless of the auto-defer heuristic. Useful when many MCP tools
+        // are connected on the non-passthrough path: inlining every tool schema
+        // can add tens of thousands of tokens to each request's cached prefix,
+        // and forcing tool-search defers them (fetched on demand) for a large
+        // token reduction with no loss of capability.
+        ENABLE_TOOL_SEARCH:
+          envBool("FORCE_TOOL_SEARCH") || hasDeferredTools ? "true" : "false",
         ...(passthrough ? { ENABLE_CLAUDEAI_MCP_SERVERS: "false" } : {}),
         // When running as root (Docker, Unraid, NAS), set IS_SANDBOX=1 to
         // bypass the SDK's root check. Without this, the SDK exits with:
